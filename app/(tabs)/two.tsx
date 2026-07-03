@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { StyleSheet, TouchableOpacity, ScrollView, TextInput, FlatList, Alert } from 'react-native';
 import { Text, View } from '@/components/Themed';
 import { Search, Filter, FileText, ChevronRight, MoreHorizontal, Download, Share2, Trash2, Plus, FileUp } from 'lucide-react-native';
@@ -7,6 +7,9 @@ import Colors from '@/constants/Colors';
 import { useColorScheme } from '@/components/useColorScheme';
 import * as DocumentPicker from 'expo-document-picker';
 import { LinearGradient } from 'expo-linear-gradient';
+import { db } from '../../lib/firebase';
+import { collection, query, where, orderBy, onSnapshot } from 'firebase/firestore';
+import { useAuth } from '../../context/AuthContext';
 
 const CATEGORIES = ['All', 'Recent', 'Signed', 'Pending'];
 
@@ -28,7 +31,48 @@ export default function DocumentsScreen() {
     { id: '5', name: 'Investor_Deck.pdf', date: '2024-03-15', size: '12.4 MB', status: 'Pending' },
   ];
 
-  const filteredDocuments = INITIAL_DOCS.filter(doc => {
+  const { user } = useAuth();
+  const [documents, setDocuments] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    if (!user) {
+      setDocuments(INITIAL_DOCS);
+      setIsLoading(false);
+      return;
+    }
+
+    const q = query(
+      collection(db, 'endorsements'),
+      where('signerId', '==', user.uid),
+      orderBy('createdAt', 'desc')
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const dbDocs = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          name: data.documentName || 'Untitled.pdf',
+          date: data.createdAt ? new Date(data.createdAt).toISOString().split('T')[0] : 'Unknown',
+          size: data.size || '1.2 MB',
+          status: data.status || 'Pending',
+          uri: data.fileUri || data.localUri,
+        };
+      });
+      // Merge Firestore documents with initial static docs
+      setDocuments(dbDocs.length > 0 ? [...dbDocs, ...INITIAL_DOCS] : INITIAL_DOCS);
+      setIsLoading(false);
+    }, (error) => {
+      console.error("Error fetching endorsements in two.tsx:", error);
+      setDocuments(INITIAL_DOCS);
+      setIsLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [user]);
+
+  const filteredDocuments = documents.filter(doc => {
     const matchesSearch = doc.name.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesCategory = selectedCategory === 'All' || doc.status === selectedCategory;
     return matchesSearch && matchesCategory;
@@ -122,7 +166,10 @@ export default function DocumentsScreen() {
             style={[styles.docCard, { backgroundColor: isDark ? '#1E293B' : '#F8FAFC' }]}
             onPress={() => {
               if (item.status === 'Pending') {
-                router.push({ pathname: '/sign/[id]', params: { id: item.id, name: item.name } });
+                router.push({ 
+                  pathname: '/sign/[id]', 
+                  params: { id: item.id, name: item.name, uri: (item as any).uri } 
+                });
               }
             }}
           >

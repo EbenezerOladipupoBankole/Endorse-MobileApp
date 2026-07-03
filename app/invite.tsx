@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { StyleSheet, View, Text, TouchableOpacity, TextInput, SafeAreaView, StatusBar, KeyboardAvoidingView, ScrollView, Platform } from 'react-native';
+import { StyleSheet, View, Text, TouchableOpacity, TextInput, StatusBar, KeyboardAvoidingView, ScrollView, Platform } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { X, Mail, User, FileText, Send, ChevronDown, MessageSquare } from 'lucide-react-native';
 

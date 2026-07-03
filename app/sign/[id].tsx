@@ -1,20 +1,40 @@
 import React, { useState, useRef } from 'react';
-import { StyleSheet, TouchableOpacity, View, Text, Dimensions, Animated, Image, Platform, Modal, SafeAreaView, Alert } from 'react-native';
+import { StyleSheet, TouchableOpacity, View, Text, Dimensions, Animated, Image, Platform, Modal, Alert, PanResponder } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, router } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { X, Check, PenTool, Download, Share2, ArrowLeft, RotateCcw, Save } from 'lucide-react-native';
 import { StatusBar } from 'expo-status-bar';
 import SignatureCanvas from 'react-native-signature-canvas';
+import { WebView } from 'react-native-webview';
+import * as FileSystem from 'expo-file-system';
+import { db } from '../../lib/firebase';
+import { doc, updateDoc } from 'firebase/firestore';
 
 const { width, height } = Dimensions.get('window');
 
 export default function SignDocumentScreen() {
-  const { id, name } = useLocalSearchParams();
+  const { id, name, uri } = useLocalSearchParams();
   const [isSigned, setIsSigned] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [signatureUri, setSignatureUri] = useState<string | null>(null);
   const [showSignPad, setShowSignPad] = useState(false);
-  const [showDocPreview, setShowDocPreview] = useState(true);
+  const signatureRef = useRef<any>(null);
+
+  // Drag & Drop State
+  const pan = useRef(new Animated.ValueXY({ x: 40, y: 200 })).current;
+  const [signScale, setSignScale] = useState(1);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: () => {
+        pan.setOffset({ x: (pan.x as any)._value, y: (pan.y as any)._value });
+      },
+      onPanResponderMove: Animated.event([null, { dx: pan.x, dy: pan.y }], { useNativeDriver: false }),
+      onPanResponderRelease: () => { pan.flattenOffset(); }
+    })
+  ).current;
 
   // Animation for the "Signed" stamp
   const scaleAnim = useRef(new Animated.Value(0)).current;
@@ -22,11 +42,26 @@ export default function SignDocumentScreen() {
   const handleSignature = (signature: string) => {
     setSignatureUri(signature);
     setShowSignPad(false);
+  };
+
+  const confirmSignaturePlacement = async () => {
+    if (!signatureUri) return;
     
     setIsProcessing(true);
-    // Simulate securing the document
-    setTimeout(() => {
-      setIsProcessing(false);
+    try {
+      // If we have a real document ID from firestore, update it
+      if (id && id !== 'new') {
+        const docRef = doc(db, 'endorsements', id as string);
+        await updateDoc(docRef, {
+          status: 'Completed',
+          signedAt: Date.now(),
+          signatureUri: signatureUri,
+        });
+      }
+      
+      // Keep the simulation delay for aesthetic transition
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      
       setIsSigned(true);
       Animated.spring(scaleAnim, {
         toValue: 1,
@@ -34,11 +69,20 @@ export default function SignDocumentScreen() {
         friction: 7,
         useNativeDriver: true,
       }).start();
-    }, 1500);
+    } catch (err) {
+      console.error("Error signing document:", err);
+      Alert.alert("Signing Failed", "Could not verify and sign document.");
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const clearSignPad = () => {
     setSignatureUri(null);
+    setIsSigned(false);
+    scaleAnim.setValue(0);
+    pan.setValue({ x: 40, y: 200 });
+    setSignScale(1);
   };
 
   const openSignPad = () => {
@@ -46,6 +90,7 @@ export default function SignDocumentScreen() {
       setShowSignPad(true);
     }
   };
+
 
   return (
     <View style={styles.container}>
@@ -70,35 +115,65 @@ export default function SignDocumentScreen() {
 
       {/* Document View Area */}
       <View style={styles.canvas}>
-        <TouchableOpacity 
-          activeOpacity={1} 
-          style={styles.pageMock} 
-          onPress={openSignPad}
-        >
-          {/* Mock Document Text */}
-          <View style={styles.dummyTextRow} />
-          <View style={[styles.dummyTextRow, { width: '80%' }]} />
-          <View style={[styles.dummyTextRow, { width: '90%' }]} />
-          <View style={[styles.dummyTextRow, { marginTop: 40 }]} />
-          <View style={styles.dummyTextRow} />
-          <View style={[styles.dummyTextRow, { width: '40%' }]} />
-          <View style={[styles.dummyTextRow, { marginTop: 60 }]} />
-
-          {/* Signature Placeholder/Result */}
-          {!signatureUri && !isSigned && (
-            <View style={styles.signaturePlaceholder}>
-              <View style={styles.signPulse}>
-                <PenTool size={32} color="#4F46E5" />
-              </View>
-              <Text style={styles.placeholderText}>Tap anywhere to sign with finger</Text>
+        <View style={styles.pageMock}>
+          {signatureUri && !isSigned && !isProcessing && (
+            <View style={styles.dragGuideBanner}>
+              <Text style={styles.dragGuideText}>👆 Drag signature to place • Use + / - to scale</Text>
+            </View>
+          )}
+          {/* Actual Document Preview */}
+          {uri || id !== 'new' ? (
+            <View style={{ flex: 1, overflow: 'hidden', borderRadius: 8, backgroundColor: '#F8FAFC' }}>
+              {(name as string)?.toLowerCase().endsWith('.pdf') ? (
+                uri ? (
+                  // Native PDF Viewer
+                  <WebView 
+                    source={{ uri: uri as string }} 
+                    style={{ flex: 1, width: '100%', height: '100%', backgroundColor: 'transparent' }}
+                    originWhitelist={['*']}
+                    allowFileAccess={true}
+                    allowFileAccessFromFileURLs={true}
+                    allowUniversalAccessFromFileURLs={true}
+                    scalesPageToFit={true}
+                  />
+                ) : (
+                  // Existing Doc Placeholder (No URI)
+                  <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 16 }}>
+                    <View style={{ padding: 24, backgroundColor: '#EEF2FF', borderRadius: 20 }}>
+                      <Check size={48} color="#4F46E5" />
+                    </View>
+                    <Text style={{ fontSize: 18, fontWeight: '800', color: '#1E1B4B' }}>{name}</Text>
+                    <Text style={{ color: '#64748B', fontWeight: '600' }}>Document Ready</Text>
+                  </View>
+                )
+              ) : (
+                // Image Render
+                <Image source={{ uri: uri as string }} style={{ flex: 1, width: '100%' }} resizeMode="contain" />
+              )}
+            </View>
+          ) : (
+            // Fallback for missing URI
+            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+               <Text style={{ color: '#94A3B8', fontWeight: '600' }}>Document loading failed.</Text>
             </View>
           )}
 
+          {/* Signature Result Overlay */}
           {signatureUri && (
             <Animated.View 
+              {...(isSigned ? {} : panResponder.panHandlers)}
               style={[
                 styles.signatureResult, 
-                { transform: [{ scale: scaleAnim }] }
+                { 
+                  transform: [
+                    { translateX: pan.x },
+                    { translateY: pan.y },
+                    { scale: isSigned ? scaleAnim : signScale }
+                  ],
+                  borderWidth: isSigned ? 0 : 2,
+                  borderColor: isSigned ? 'transparent' : 'rgba(79, 70, 229, 0.5)',
+                  borderStyle: 'dashed',
+                }
               ]}
             >
                <Image 
@@ -106,6 +181,16 @@ export default function SignDocumentScreen() {
                  style={styles.signatureImage} 
                  resizeMode="contain" 
                />
+               {!isSigned && (
+                  <View style={styles.resizeControls}>
+                    <TouchableOpacity onPress={() => setSignScale(s => Math.max(0.4, s - 0.2))} style={styles.resizeBtn}>
+                      <Text style={styles.resizeText}>-</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => setSignScale(s => Math.min(2.5, s + 0.2))} style={styles.resizeBtn}>
+                      <Text style={styles.resizeText}>+</Text>
+                    </TouchableOpacity>
+                  </View>
+               )}
                {isSigned && (
                  <View style={styles.verifiedStamp}>
                    <Check size={12} color="#FFF" strokeWidth={3} />
@@ -122,7 +207,7 @@ export default function SignDocumentScreen() {
                 <Text style={styles.auditText}>ID: END-{Math.floor(Math.random()*1000000)}</Text>
              </View>
           )}
-        </TouchableOpacity>
+        </View>
       </View>
 
       {/* Global Bottom Actions */}
@@ -148,8 +233,42 @@ export default function SignDocumentScreen() {
                <Text style={styles.doneBtnText}>Finish</Text>
              </TouchableOpacity>
           </View>
+        ) : signatureUri ? (
+          <View style={styles.placementActions}>
+            <TouchableOpacity 
+              style={styles.redrawBtn} 
+              onPress={openSignPad}
+            >
+              <RotateCcw size={18} color="#4F46E5" />
+              <Text style={styles.redrawBtnText}>Draw Again</Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={styles.confirmBtn} 
+              onPress={confirmSignaturePlacement}
+            >
+              <Check size={18} color="#1E1B4B" />
+              <Text style={styles.confirmBtnText}>Confirm Placement</Text>
+            </TouchableOpacity>
+          </View>
         ) : (
-          <Text style={styles.hintText}>Tap the document to open the signature pad</Text>
+          <View style={{ alignItems: 'center' }}>
+            <TouchableOpacity 
+              style={{
+                backgroundColor: '#FBBF24',
+                paddingVertical: 14,
+                paddingHorizontal: 40,
+                borderRadius: 12,
+                shadowColor: '#FBBF24',
+                shadowOffset: { width: 0, height: 4 },
+                shadowOpacity: 0.3,
+                shadowRadius: 8,
+                elevation: 4,
+              }} 
+              onPress={openSignPad}
+            >
+              <Text style={{ color: '#1E1B4B', fontWeight: '900', fontSize: 16 }}>Sign Now</Text>
+            </TouchableOpacity>
+          </View>
         )}
       </View>
 
@@ -168,6 +287,7 @@ export default function SignDocumentScreen() {
           
           <View style={styles.signPadWrapper}>
              <SignatureCanvas
+                ref={signatureRef}
                 onOK={handleSignature}
                 onEmpty={() => Alert.alert('Empty', 'Please provide a signature.')}
                 descriptionText="Sign your name clearly using your finger"
@@ -187,20 +307,12 @@ export default function SignDocumentScreen() {
                <Text style={styles.signCancelText}>Discard</Text>
              </TouchableOpacity>
              <TouchableOpacity 
-               style={styles.signSaveBtn}
+               style={[styles.signSaveBtn, { backgroundColor: '#FBBF24', borderRadius: 14, justifyContent: 'center', alignItems: 'center' }]}
                onPress={() => {
-                  // The canvas usually has its own ok button, 
-                  // but we trigger it externally if needed via a ref
-                  // Here we assume the internal 'Save' trigger
+                  signatureRef.current?.readSignature();
                }}
              >
-               <LinearGradient 
-                 colors={['#4F46E5', '#6366F1']} 
-                 style={styles.signSaveGradient}
-               >
-                  <Save size={18} color="#FFF" />
-                  <Text style={styles.signSaveText}>Apply to Document</Text>
-               </LinearGradient>
+               <Text style={{ color: '#1E1B4B', fontWeight: '900', fontSize: 16 }}>Apply to Document</Text>
              </TouchableOpacity>
           </View>
         </SafeAreaView>
@@ -303,11 +415,35 @@ const styles = StyleSheet.create({
   },
   signatureResult: {
     position: 'absolute',
-    bottom: 80,
-    left: 40,
+    top: 0,
+    left: 0,
     width: 180,
     height: 100,
     justifyContent: 'center',
+    zIndex: 100,
+  },
+  resizeControls: {
+    position: 'absolute',
+    top: -40,
+    right: 0,
+    flexDirection: 'row',
+    gap: 8,
+  },
+  resizeBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
+  },
+  resizeText: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#4F46E5',
+    lineHeight: 24,
   },
   signatureImage: {
     width: '100%',
@@ -459,5 +595,69 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontWeight: '800',
     fontSize: 16,
+  },
+  dragGuideBanner: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    right: 12,
+    backgroundColor: 'rgba(79, 70, 229, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(79, 70, 229, 0.2)',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 99,
+  },
+  dragGuideText: {
+    color: '#4F46E5',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
+  placementActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    width: '100%',
+  },
+  redrawBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    gap: 6,
+  },
+  redrawBtnText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#4F46E5',
+  },
+  confirmBtn: {
+    flex: 1.5,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: '#FBBF24',
+    shadowColor: '#FBBF24',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+    gap: 6,
+  },
+  confirmBtnText: {
+    fontSize: 14,
+    fontWeight: '900',
+    color: '#1E1B4B',
   },
 });

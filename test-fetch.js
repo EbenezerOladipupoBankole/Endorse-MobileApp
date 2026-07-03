@@ -1,12 +1,19 @@
-
 async function testFetch() {
   try {
-    const res = await fetch('https://api.expo.dev/v2/versions/latest');
-    console.log('Status:', res.status);
-    const data = await res.text();
-    console.log('Data length:', data.length);
+    const url = 'https://does-not-exist-123456789.expo.dev';
+    console.log('Fetching invalid url:', url);
+    await fetch(url);
   } catch (err) {
-    console.error('Fetch failed:', err);
+    console.error('Fetch failed structure:');
+    console.error('Name:', err.name);
+    console.error('Message:', err.message);
+    console.error('Code:', err.code);
+    console.error('Has Cause:', !!err.cause);
+    if (err.cause) {
+      console.error('Cause Name:', err.cause.name);
+      console.error('Cause Message:', err.cause.message);
+      console.error('Cause Code:', err.cause.code);
+    }
   }
 }
 testFetch();

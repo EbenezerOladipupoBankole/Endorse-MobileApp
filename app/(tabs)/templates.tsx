@@ -1,29 +1,23 @@
 import React, { useState } from 'react';
-import { StyleSheet, TouchableOpacity, FlatList, TextInput, View as RNView, Modal } from 'react-native';
-import { Text, View } from '@/components/Themed';
-import { FileBox, Search, Plus, MoreHorizontal, ChevronRight, PenTool, Copy, Trash2, Edit3, X } from 'lucide-react-native';
+import { StyleSheet, TouchableOpacity, FlatList, TextInput, View, Text, Modal, Platform } from 'react-native';
+import { Search, Plus, MoreHorizontal, FileText, X, PenTool, Copy, Trash2, Edit3, ArrowUpRight } from 'lucide-react-native';
 import { router } from 'expo-router';
-import Colors from '@/constants/Colors';
-import { useColorScheme } from '@/components/useColorScheme';
 
-const initialTemplates = [
-  { id: '1', name: 'NDA_Standard_Template.pdf', owner: 'Self', date: '2026-03-20', usageCount: 12 },
-  { id: '2', name: 'Independent_Contractor_Agreement.pdf', owner: 'HR Team', date: '2026-03-15', usageCount: 45 },
-  { id: '3', name: 'Sales_Quote_Template.pdf', owner: 'Sales Team', date: '2026-03-10', usageCount: 128 },
-  { id: '4', name: 'Employee_Onboarding_Form.pdf', owner: 'HR Team', date: '2026-02-28', usageCount: 30 },
+const REAL_TEMPLATES = [
+  { id: 't1', name: 'Non-Disclosure Agreement', category: 'Legal', date: 'Oct 12', uses: 124 },
+  { id: 't2', name: 'Independent Contractor', category: 'HR', date: 'Sep 28', uses: 89 },
+  { id: 't3', name: 'Standard Sales Contract', category: 'Sales', date: 'Nov 02', uses: 256 },
+  { id: 't4', name: 'Employee Onboarding', category: 'HR', date: 'Aug 15', uses: 42 },
+  { id: 't5', name: 'Vendor Service Agreement', category: 'Ops', date: 'Oct 05', uses: 18 },
+  { id: 't6', name: 'Offer Letter', category: 'HR', date: 'Jan 10', uses: 310 },
 ];
 
 export default function TemplatesScreen() {
-  const colorScheme = useColorScheme() ?? 'light';
-  const tint = '#4F46E5';
-  const isDark = colorScheme === 'dark';
-
   const [searchQuery, setSearchQuery] = useState('');
-  const [templates, setTemplates] = useState(initialTemplates);
   const [selectedTemplate, setSelectedTemplate] = useState<any>(null);
   const [isActionModalOpen, setIsActionModalOpen] = useState(false);
 
-  const filteredTemplates = templates.filter(t => 
+  const filteredTemplates = REAL_TEMPLATES.filter(t => 
     t.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
@@ -32,28 +26,30 @@ export default function TemplatesScreen() {
     setIsActionModalOpen(true);
   };
 
-  const TemplateItem = ({ item }: { item: any }) => (
+  const handleUseTemplate = (template: any) => {
+    router.push({ pathname: '/sign/[id]', params: { id: template.id, name: template.name } });
+  };
+
+  const TemplateItem = ({ item }: { item: typeof REAL_TEMPLATES[0] }) => (
     <TouchableOpacity 
-      style={[styles.templateCard, { backgroundColor: isDark ? '#1E293B' : '#FFFFFF' }]} 
+      style={styles.gridCard} 
       activeOpacity={0.7}
-      onPress={() => router.push({ pathname: '/sign/[id]', params: { id: item.id, name: item.name } })}
+      onPress={() => handleUseTemplate(item)}
     >
       <View style={styles.cardHeader}>
         <View style={styles.iconBox}>
-          <FileBox size={24} color={tint} />
+          <FileText size={24} color="#000000" />
         </View>
-        <TouchableOpacity onPress={() => openActions(item)}>
-          <MoreHorizontal size={20} color="#94A3B8" />
+        <TouchableOpacity style={styles.moreBtn} onPress={() => openActions(item)}>
+          <MoreHorizontal size={20} color="#9CA3AF" />
         </TouchableOpacity>
       </View>
       
-      <Text style={styles.templateName} numberOfLines={1}>{item.name}</Text>
+      <Text style={styles.templateName} numberOfLines={2}>{item.name}</Text>
       
       <View style={styles.cardFooter}>
-         <View style={styles.badge}>
-           <Text style={styles.badgeText}>{item.owner}</Text>
-         </View>
-         <Text style={styles.usageText}>{item.usageCount} uses</Text>
+        <Text style={styles.categoryText}>{item.category}</Text>
+        <Text style={styles.usesText}>{item.uses} uses</Text>
       </View>
     </TouchableOpacity>
   );
@@ -61,20 +57,23 @@ export default function TemplatesScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>Templates</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.title}>Templates</Text>
+          <Text style={styles.subtitle}>Standardize your workflows</Text>
+        </View>
         <TouchableOpacity style={styles.createBtn} onPress={() => router.push('/invite')}>
-          <Plus size={20} color="#FFF" />
+          <Plus size={20} color="#FFFFFF" />
           <Text style={styles.createBtnText}>New</Text>
         </TouchableOpacity>
       </View>
 
       <View style={styles.searchSection}>
         <View style={styles.searchBar}>
-          <Search size={18} color="#94A3B8" />
+          <Search size={20} color="#9CA3AF" />
           <TextInput
             style={styles.searchInput}
-            placeholder="Search templates"
-            placeholderTextColor="#94A3B8"
+            placeholder="Search templates..."
+            placeholderTextColor="#9CA3AF"
             value={searchQuery}
             onChangeText={setSearchQuery}
           />
@@ -88,10 +87,11 @@ export default function TemplatesScreen() {
         numColumns={2}
         contentContainerStyle={styles.listContent}
         columnWrapperStyle={styles.columnWrapper}
+        showsVerticalScrollIndicator={false}
         ListEmptyComponent={
           <View style={styles.emptyState}>
-            <FileBox size={48} color="#CBD5E1" />
-            <Text style={styles.emptyText}>No templates found</Text>
+            <FileText size={48} color="#E5E7EB" />
+            <Text style={styles.emptyTitle}>No templates found</Text>
           </View>
         }
       />
@@ -105,14 +105,17 @@ export default function TemplatesScreen() {
         >
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle} numberOfLines={1}>{selectedTemplate?.name}</Text>
-              <TouchableOpacity onPress={() => setIsActionModalOpen(false)}>
-                <X size={20} color="#64748B" />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.modalTitle} numberOfLines={1}>{selectedTemplate?.name}</Text>
+                <Text style={styles.modalSubtitle}>{selectedTemplate?.category} Template</Text>
+              </View>
+              <TouchableOpacity onPress={() => setIsActionModalOpen(false)} style={styles.closeBtn}>
+                <X size={20} color="#6B7280" />
               </TouchableOpacity>
             </View>
 
             <View style={styles.modalBody}>
-               <ActionRow icon={PenTool} label="Use as a Template" onPress={() => { setIsActionModalOpen(false); router.push('/invite'); }} />
+               <ActionRow icon={ArrowUpRight} label="Use this Template" onPress={() => { setIsActionModalOpen(false); handleUseTemplate(selectedTemplate); }} />
                <ActionRow icon={Edit3} label="Edit Layout" onPress={() => setIsActionModalOpen(false)} />
                <ActionRow icon={Copy} label="Duplicate" onPress={() => setIsActionModalOpen(false)} />
                <View style={styles.modalDivider} />
@@ -125,9 +128,9 @@ export default function TemplatesScreen() {
   );
 }
 
-const ActionRow = ({ icon: Icon, label, onPress, color = '#1E1B4B' }: any) => (
+const ActionRow = ({ icon: Icon, label, onPress, color = '#000000' }: any) => (
   <TouchableOpacity style={styles.actionRow} onPress={onPress}>
-    <Icon size={20} color={color} />
+    <Icon size={20} color={color} style={{ marginRight: 16 }} />
     <Text style={[styles.actionLabel, { color }]}>{label}</Text>
   </TouchableOpacity>
 );
@@ -135,130 +138,134 @@ const ActionRow = ({ icon: Icon, label, onPress, color = '#1E1B4B' }: any) => (
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8FAFC',
+    backgroundColor: '#FFFFFF',
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 24,
-    paddingTop: 60,
-    paddingBottom: 16,
+    paddingTop: Platform.OS === 'ios' ? 60 : 40,
+    paddingBottom: 20,
     backgroundColor: '#FFFFFF',
   },
   title: {
     fontSize: 28,
     fontWeight: '800',
-    color: '#1E1B4B',
+    color: '#000000',
+    marginBottom: 4,
+  },
+  subtitle: {
+    fontSize: 14,
+    color: '#6B7280',
+    fontWeight: '400',
   },
   createBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#4F46E5',
+    backgroundColor: '#000000',
     paddingHorizontal: 16,
     paddingVertical: 10,
-    borderRadius: 12,
+    borderRadius: 8,
     gap: 8,
   },
   createBtnText: {
-    color: '#FFF',
-    fontWeight: '700',
+    color: '#FFFFFF',
+    fontWeight: '600',
     fontSize: 14,
   },
   searchSection: {
-    padding: 16,
+    paddingHorizontal: 24,
+    paddingBottom: 20,
     backgroundColor: '#FFFFFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
   },
   searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F1F5F9',
+    backgroundColor: '#F9FAFB',
     height: 48,
-    borderRadius: 10,
+    borderRadius: 8,
     paddingHorizontal: 16,
     gap: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
   },
   searchInput: {
     flex: 1,
     fontSize: 16,
-    color: '#1E1B4B',
+    color: '#000000',
   },
   listContent: {
-    padding: 16,
+    paddingHorizontal: 24,
+    paddingBottom: 100,
   },
   columnWrapper: {
-    gap: 16,
+    justifyContent: 'space-between',
     marginBottom: 16,
   },
-  templateCard: {
-    flex: 1,
-    borderRadius: 16,
-    padding: 20,
+  gridCard: {
+    width: '47%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 16,
     borderWidth: 1,
-    borderColor: '#F1F5F9',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
+    borderColor: '#E5E7EB',
   },
   cardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    marginBottom: 20,
+    marginBottom: 16,
   },
   iconBox: {
-    width: 48,
-    height: 48,
-    borderRadius: 12,
-    backgroundColor: '#EEF2FF',
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
     alignItems: 'center',
     justifyContent: 'center',
   },
+  moreBtn: {
+    padding: 4,
+    marginRight: -4,
+    marginTop: -4,
+  },
   templateName: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#1E1B4B',
-    marginBottom: 12,
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#000000',
+    lineHeight: 20,
+    marginBottom: 16,
+    height: 40,
   },
   cardFooter: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
+    alignItems: 'center',
   },
-  badge: {
-    backgroundColor: '#F1F5F9',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  badgeText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#64748B',
+  categoryText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#6B7280',
     textTransform: 'uppercase',
   },
-  usageText: {
+  usesText: {
     fontSize: 12,
-    color: '#94A3B8',
-    fontWeight: '600',
+    color: '#9CA3AF',
+    fontWeight: '500',
   },
   emptyState: {
-    flex: 1,
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingTop: 100,
+    paddingTop: 60,
   },
-  emptyText: {
+  emptyTitle: {
     marginTop: 16,
     fontSize: 16,
-    color: '#94A3B8',
     fontWeight: '600',
+    color: '#000000',
   },
-  /* Action Modal */
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
@@ -266,24 +273,33 @@ const styles = StyleSheet.create({
   },
   modalContent: {
     backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingBottom: 40,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingBottom: Platform.OS === 'ios' ? 40 : 24,
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     padding: 24,
     borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
+    borderBottomColor: '#E5E7EB',
   },
   modalTitle: {
-    flex: 1,
     fontSize: 18,
-    fontWeight: '800',
-    color: '#1E1B4B',
-    marginRight: 16,
+    fontWeight: '700',
+    color: '#000000',
+    marginBottom: 4,
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    fontWeight: '400',
+    color: '#6B7280',
+  },
+  closeBtn: {
+    backgroundColor: '#F9FAFB',
+    padding: 8,
+    borderRadius: 16,
   },
   modalBody: {
     padding: 16,
@@ -292,7 +308,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     padding: 16,
-    gap: 16,
   },
   actionLabel: {
     fontSize: 16,
@@ -300,7 +315,9 @@ const styles = StyleSheet.create({
   },
   modalDivider: {
     height: 1,
-    backgroundColor: '#F1F5F9',
-    marginVertical: 8,
+    backgroundColor: '#E5E7EB',
+    marginVertical: 4,
+    marginHorizontal: 16,
   },
 });
+

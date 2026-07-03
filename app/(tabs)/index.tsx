@@ -1,20 +1,53 @@
-import React, { useState, useRef } from 'react';
-import { StyleSheet, View, Text, ScrollView, TextInput, TouchableOpacity, Image, Platform, SafeAreaView, StatusBar, Animated, Dimensions, Pressable, Modal, Alert } from 'react-native';
+import React, { useState, useRef, useEffect } from 'react';
+import { StyleSheet, View, Text, ScrollView, TextInput, TouchableOpacity, Image, Platform, StatusBar, Animated, Dimensions, Pressable, Modal, Alert, ActivityIndicator } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Menu, Search, Filter, User, ChevronRight, PenTool, Fingerprint, Users, Clock, CheckCircle2, ChevronRightIcon, X, LayoutDashboard, FileDigit, Trash2, Settings, FileBox, FileUp, Camera, Copy, FilePlus, Scan, FileStack, RefreshCcw, Bell, Plus, FileText, ArrowUpRight, ShieldCheck, Sparkles, Signature, Briefcase, Workflow, HardDrive } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
-import { auth } from '@/lib/firebase';
+import { db, auth } from '@/lib/firebase';
+import { collection, query, where, orderBy, onSnapshot, limit } from 'firebase/firestore';
+import { useAuth } from '../../context/AuthContext';
 
 const { width, height } = Dimensions.get('window');
 
 export default function DashboardScreen() {
+  const { user, profile } = useAuth();
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isSignModalOpen, setIsSignModalOpen] = useState(false);
   const [isProcessingUI, setIsProcessingUI] = useState(false);
+  const [recentDocs, setRecentDocs] = useState<any[]>([]);
+  const [isLoadingDocs, setIsLoadingDocs] = useState(true);
+  
   const isPickingDocument = useRef(false);
   const drawerAnim = useRef(new Animated.Value(-width)).current;
+
+  useEffect(() => {
+    if (!user) return;
+
+    // Listen to real-time updates for endorsements
+    const q = query(
+      collection(db, 'endorsements'),
+      where('signerId', '==', user.uid),
+      orderBy('createdAt', 'desc'),
+      limit(5)
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const docs = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setRecentDocs(docs);
+      setIsLoadingDocs(false);
+    }, (error) => {
+      console.error("Error listening to endorsements:", error);
+      setIsLoadingDocs(false);
+    });
+
+    return () => unsubscribe();
+  }, [user]);
 
   const toggleDrawer = () => {
     if (isDrawerOpen) {
@@ -38,28 +71,24 @@ export default function DashboardScreen() {
     isPickingDocument.current = true;
     setIsProcessingUI(true);
     
-    // Close the modal first
     setIsSignModalOpen(false);
-
-    // Wait for the modal animation to fully exit the screen (crucial for iOS)
     await new Promise(resolve => setTimeout(resolve, 600));
 
     try {
       const result = await DocumentPicker.getDocumentAsync({ 
-        type: 'application/pdf',
+        type: ['application/pdf', 'image/*'],
         copyToCacheDirectory: true 
       });
       
       if (!result.canceled) {
-        // Log to confirm success
-        console.log('Document picked:', result.assets[0].name);
-        router.push({ pathname: '/sign/[id]', params: { id: 'new', name: result.assets[0].name } });
+        router.push({ 
+          pathname: '/sign/[id]', 
+          params: { id: 'new', name: result.assets[0].name, uri: result.assets[0].uri } 
+        });
       }
     } catch (err) {
       console.error('Error picking document:', err);
-      // Even if it fails, the lock will be released in finally
     } finally {
-      // Extended safety delay before allowing another pick
       setTimeout(() => {
         isPickingDocument.current = false;
         setIsProcessingUI(false);
@@ -69,26 +98,18 @@ export default function DashboardScreen() {
 
   const handleScanDocument = async () => {
     setIsSignModalOpen(false);
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    
-    if (status !== 'granted') {
-       Alert.alert('Permission needed', 'Camera access is required to scan papers.');
-       return;
-    }
+    router.push('/scanner');
+  };
 
-    try {
-       const result = await ImagePicker.launchCameraAsync({
-          quality: 1,
-          allowsEditing: true, // Allows user to crop the "Paper"
-       });
-
-       if (!result.canceled) {
-          Alert.alert('Scan Complete', 'Image captured and converted to document.');
-          router.push({ pathname: '/sign/[id]', params: { id: 'scan', name: 'Scanned_Doc_' + Date.now() + '.pdf' } });
-       }
-    } catch (err) {
-       console.error('Error scanning:', err);
-    }
+  const getTimeAgo = (timestamp: any) => {
+    if (!timestamp) return 'Just now';
+    const seconds = Math.floor((Date.now() - timestamp) / 1000);
+    if (seconds < 60) return 'Just now';
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    return new Date(timestamp).toLocaleDateString();
   };
 
   return (
@@ -116,7 +137,7 @@ export default function DashboardScreen() {
           <View style={styles.welcomeRow}>
             <View>
               <Text style={styles.greeting}>Good morning,</Text>
-              <Text style={styles.userName}>{auth.currentUser?.displayName || 'User'}</Text>
+              <Text style={styles.userName}>{profile?.firstName || 'User'}</Text>
             </View>
             <TouchableOpacity 
               style={styles.profileBtn}
@@ -131,25 +152,26 @@ export default function DashboardScreen() {
              <TouchableOpacity 
                style={styles.mainActionCard}
                onPress={() => setIsSignModalOpen(true)}
-               activeOpacity={0.9}
+               activeOpacity={0.8}
              >
-                <LinearGradient 
-                  colors={['#4F46E5', '#3730A3']} 
-                  style={styles.mainActionGradient}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                >
+                <View style={styles.mainActionContent}>
                   <View style={styles.mainActionHeader}>
-                     <View style={styles.qaIconCircleLarge}>
-                        <Signature size={28} color="#4F46E5" />
+                     <View style={styles.iconBackgroundLight}>
+                        <Signature size={24} color="#4F46E5" />
                      </View>
-                     <ArrowUpRight size={20} color="rgba(255,255,255,0.6)" />
+                     <View style={styles.mainActionTextContainer}>
+                       <Text style={styles.mainActionTitle}>Request Signature</Text>
+                       <Text style={styles.mainActionSubtitle}>Upload a new document to sign or send to others.</Text>
+                     </View>
                   </View>
-                  <View>
-                    <Text style={styles.mainActionTitle}>Sign Now</Text>
-                    <Text style={styles.mainActionSubtitle}>Securely endorse your documents</Text>
+                  <View style={styles.mainActionFooter}>
+                     <Text style={{ color: '#94A3B8', fontSize: 13, fontWeight: '600' }}>Supports PDF, Word, Image</Text>
+                     <View style={styles.mainActionButton}>
+                       <Plus size={16} color="#FFFFFF" />
+                       <Text style={styles.mainActionButtonText}>Start</Text>
+                     </View>
                   </View>
-                </LinearGradient>
+                </View>
              </TouchableOpacity>
 
              <View style={styles.secondaryActionsRow}>
@@ -158,17 +180,32 @@ export default function DashboardScreen() {
                  onPress={handleScanDocument}
                  activeOpacity={0.7}
                >
-                  <View style={[styles.qaIconCircleSmall, { backgroundColor: '#F0F9FF' }]}>
-                     <Scan size={20} color="#0EA5E9" />
+                  <View style={styles.secondaryActionIconWrapper}>
+                     <Scan size={24} color="#1E1B4B" />
                   </View>
                   <Text style={styles.secondaryActionLabel}>Scan Doc</Text>
                </TouchableOpacity>
 
-               <TouchableOpacity style={styles.secondaryActionCard} activeOpacity={0.7}>
-                  <View style={[styles.qaIconCircleSmall, { backgroundColor: '#F0FDF4' }]}>
-                     <RefreshCcw size={20} color="#22C55E" />
+               <TouchableOpacity 
+                 style={styles.secondaryActionCard} 
+                 activeOpacity={0.7} 
+                 onPress={() => router.push('/(tabs)/templates')}
+               >
+                  <View style={styles.secondaryActionIconWrapper}>
+                     <FileBox size={24} color="#4F46E5" />
                   </View>
-                  <Text style={styles.secondaryActionLabel}>Converter</Text>
+                  <Text style={styles.secondaryActionLabel}>Templates</Text>
+               </TouchableOpacity>
+               
+               <TouchableOpacity 
+                 style={styles.secondaryActionCard} 
+                 activeOpacity={0.7}
+                 onPress={() => Alert.alert('In Person Signing', 'This feature will allow a person next to you to sign a document directly on your device. Coming soon!')}
+               >
+                  <View style={styles.secondaryActionIconWrapper}>
+                     <Users size={24} color="#1E1B4B" />
+                  </View>
+                  <Text style={styles.secondaryActionLabel}>In Person</Text>
                </TouchableOpacity>
              </View>
           </View>
@@ -176,30 +213,31 @@ export default function DashboardScreen() {
           {/* Recent Documents Focused Section */}
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Recent activity</Text>
-            <TouchableOpacity>
+            <TouchableOpacity onPress={() => router.push('/(tabs)/two')}>
                <Text style={styles.seeAllText}>View all</Text>
             </TouchableOpacity>
           </View>
 
           <View style={styles.docList}>
-             <DocumentRow 
-               name="Employment_Offer_Ltr.pdf" 
-               status="Action Required" 
-               date="2 hours ago" 
-               color="#F59E0B"
-             />
-             <DocumentRow 
-               name="NDA_Sign_Request.pdf" 
-               status="Completed" 
-               date="Yesterday" 
-               color="#22C55E"
-             />
-             <DocumentRow 
-               name="Monthly_Report_Feb.pdf" 
-               status="Waiting for Others" 
-               date="3 days ago" 
-               color="#6366F1"
-             />
+             {isLoadingDocs ? (
+               <ActivityIndicator color="#4F46E5" style={{ marginVertical: 20 }} />
+             ) : recentDocs.length > 0 ? (
+               recentDocs.map((doc) => (
+                 <DocumentRow 
+                   key={doc.id}
+                   name={doc.documentName} 
+                   status={doc.status} 
+                   date={getTimeAgo(doc.createdAt)} 
+                   color={doc.status === 'Completed' ? '#22C55E' : '#F59E0B'}
+                   onPress={() => router.push({ pathname: '/sign/[id]', params: { id: doc.id, name: doc.documentName } })}
+                 />
+               ))
+             ) : (
+               <View style={styles.emptyState}>
+                 <FileText size={40} color="#CBD5E1" />
+                 <Text style={styles.emptyText}>No recent activity yet</Text>
+               </View>
+             )}
           </View>
 
           {/* Business Suite / Management Tools */}
@@ -237,6 +275,7 @@ export default function DashboardScreen() {
 
           <View style={{ height: 100 }} />
         </ScrollView>
+
       </SafeAreaView>
 
       {/* Floating Action Button */}
@@ -308,7 +347,7 @@ export default function DashboardScreen() {
                     icon={Copy} 
                     label="From Template" 
                     desc="Fast-track with a pre-formatted template" 
-                    onPress={() => { setIsSignModalOpen(false); router.push('/(tabs)/templates'); }} 
+                    onPress={() => { setIsSignModalOpen(false); Alert.alert('Coming Soon', 'Templates feature is currently in development.'); }} 
                     disabled={isProcessingUI}
                   />
                </View>
@@ -438,66 +477,92 @@ const styles = StyleSheet.create({
     gap: 16,
   },
   mainActionCard: {
-    height: 140,
-    borderRadius: 24,
-    overflow: 'hidden',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    padding: 20,
+    shadowColor: '#64748B',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    elevation: 4,
   },
-  mainActionGradient: {
-    flex: 1,
-    padding: 24,
-    justifyContent: 'space-between',
+  mainActionContent: {
+    gap: 16,
   },
   mainActionHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-  },
-  qaIconCircleLarge: {
-    width: 52,
-    height: 52,
-    borderRadius: 16,
-    backgroundColor: '#FFF',
     alignItems: 'center',
+    gap: 16,
+  },
+  iconBackgroundLight: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    backgroundColor: '#EEF2FF',
     justifyContent: 'center',
+    alignItems: 'center',
+  },
+  mainActionTextContainer: {
+    flex: 1,
   },
   mainActionTitle: {
-    color: '#FFF',
-    fontSize: 22,
-    fontWeight: '900',
+    color: '#1E1B4B',
+    fontSize: 18,
+    fontWeight: '800',
     marginBottom: 4,
   },
   mainActionSubtitle: {
-    color: 'rgba(255,255,255,0.7)',
+    color: '#64748B',
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: '500',
+    lineHeight: 18,
+  },
+  mainActionFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+  },
+  mainActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#4F46E5',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    gap: 8,
+  },
+  mainActionButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 14,
   },
   secondaryActionsRow: {
     flexDirection: 'row',
-    gap: 16,
+    gap: 12,
   },
   secondaryActionCard: {
     flex: 1,
-    height: 100,
-    backgroundColor: '#F8FAFC',
-    borderRadius: 20,
-    padding: 16,
+    height: 96,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#F1F5F9',
+    borderColor: '#E2E8F0',
     justifyContent: 'center',
     alignItems: 'center',
     gap: 8,
   },
-  qaIconCircleSmall: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
+  secondaryActionIconWrapper: {
+    marginBottom: 2,
   },
   secondaryActionLabel: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#1E1B4B',
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#475569',
   },
   sectionHeader: {
     flexDirection: 'row',

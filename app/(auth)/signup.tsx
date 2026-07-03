@@ -17,6 +17,12 @@ const EyeIcon = () => (
     <Circle cx="10" cy="10" r="2.6" stroke="currentColor" strokeWidth="1.6" />
   </Svg>
 );
+const CheckIcon = () => (
+  <Svg width="13" height="10" viewBox="0 0 13 10" fill="none">
+    <Path d="M1 5l4 4 7-8" stroke="#FFFFFF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+  </Svg>
+);
+
 const GoogleIcon = () => (
   <Svg width="19" height="19" viewBox="0 0 18 18">
     <Path fill="#4285F4" d="M17.6 9.2c0-.6-.05-1.18-.16-1.74H9v3.3h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.9c1.7-1.57 2.66-3.88 2.66-6.54z" />
@@ -34,34 +40,49 @@ const AppleIcon = () => (
 
 const emailOK = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
 
-export default function LoginScreen() {
+export default function SignupScreen() {
   const router = useRouter();
   
-  const [li, setLi] = useState({ email: '', pass: '' });
-  const [liT, setLiT] = useState<Record<string, boolean>>({});
-  const [liSubmit, setLiSubmit] = useState(false);
+  const [su, setSu] = useState({ name: '', email: '', pass: '', terms: false });
+  const [suT, setSuT] = useState<Record<string, boolean>>({});
+  const [suSubmit, setSuSubmit] = useState(false);
   const [showPw, setShowPw] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  const liErr = {
-    email: !li.email.trim() ? 'Email is required' : !emailOK(li.email) ? 'Enter a valid email address' : '',
-    pass: !li.pass ? 'Enter your password' : '',
+  const suErr = {
+    name: !su.name.trim() ? 'Please enter your name' : '',
+    email: !su.email.trim() ? 'Email is required' : !emailOK(su.email) ? 'Enter a valid email address' : '',
+    pass: su.pass.length < 8 ? 'Use at least 8 characters' : '',
+    terms: !su.terms ? 'Please accept the terms to continue' : '',
   };
 
-  const showLi = (f: 'email' | 'pass') => (liSubmit || liT[f]) ? liErr[f] : '';
+  const showSu = (f: 'name' | 'email' | 'pass' | 'terms') => (suSubmit || suT[f]) ? suErr[f] : '';
+
+  const getStrength = (p: string) => {
+    let s = 0;
+    if (p.length >= 8) s++;
+    if (/[A-Z]/.test(p) && /[a-z]/.test(p)) s++;
+    if (/\d/.test(p) || /[^A-Za-z0-9]/.test(p)) s++;
+    return Math.min(s, 3);
+  };
+
+  const strength = getStrength(su.pass);
+  const sColors = ['#D9534F', '#E0A82E', '#2E9E5B'];
+  const sLabels = ['Weak', 'Fair', 'Strong'];
+  const sColor = su.pass ? sColors[Math.max(0, strength - 1)] : T.colors.fieldBorder;
 
   const handleSocial = () => {
-    router.push({ pathname: '/(auth)/success', params: { from: 'login' } });
+    router.push({ pathname: '/(auth)/success', params: { from: 'signup' } });
   };
 
-  const submitLogin = () => {
-    setLiSubmit(true);
-    if (!liErr.email && !liErr.pass) {
+  const submitSignup = () => {
+    setSuSubmit(true);
+    if (!suErr.name && !suErr.email && !suErr.pass && !suErr.terms) {
       setSubmitting(true);
       setTimeout(() => {
         setSubmitting(false);
-        router.push({ pathname: '/(auth)/success', params: { from: 'login' } });
-      }, 900);
+        router.push({ pathname: '/(auth)/otp', params: { email: su.email } });
+      }, 1100);
     }
   };
 
@@ -74,8 +95,10 @@ export default function LoginScreen() {
             <BackIcon />
           </Pressable>
 
-          <Text style={styles.title}>Welcome back</Text>
-          <Text style={styles.subtitle}>Sign in to pick up right where you left off.</Text>
+          <Text style={styles.title}>Create your account</Text>
+          <Text style={styles.subtitle}>
+            Join <Text style={{ fontFamily: T.fonts.jakarta.bold, color: T.colors.blue }}>Endorse</Text> and start signing documents in seconds.
+          </Text>
 
           <View style={styles.socialContainer}>
             <Pressable style={styles.socialBtn} onPress={handleSocial}>
@@ -90,38 +113,46 @@ export default function LoginScreen() {
 
           <View style={styles.dividerContainer}>
             <View style={styles.dividerLine} />
-            <Text style={styles.dividerText}>or</Text>
+            <Text style={styles.dividerText}>or sign up with email</Text>
             <View style={styles.dividerLine} />
           </View>
 
-          <Text style={styles.label}>Email</Text>
+          <Text style={styles.label}>Full name</Text>
           <TextInput
-            style={[styles.input, { borderColor: showLi('email') ? T.colors.errBorder : T.colors.fieldBorder }]}
-            value={li.email}
-            onChangeText={(text) => setLi({ ...li, email: text })}
-            onBlur={() => setLiT({ ...liT, email: true })}
+            style={[styles.input, { borderColor: showSu('name') ? T.colors.errBorder : T.colors.fieldBorder }]}
+            value={su.name}
+            onChangeText={(text) => setSu({ ...su, name: text })}
+            onBlur={() => setSuT({ ...suT, name: true })}
+            placeholder="Alex Morgan"
+            placeholderTextColor="#9AA7BC"
+          />
+          <View style={styles.errorContainer}>
+            <Text style={styles.errorText}>{showSu('name')}</Text>
+          </View>
+
+          <Text style={[styles.label, { marginTop: 6 }]}>Email</Text>
+          <TextInput
+            style={[styles.input, { borderColor: showSu('email') ? T.colors.errBorder : T.colors.fieldBorder }]}
+            value={su.email}
+            onChangeText={(text) => setSu({ ...su, email: text })}
+            onBlur={() => setSuT({ ...suT, email: true })}
             placeholder="you@email.com"
             placeholderTextColor="#9AA7BC"
             keyboardType="email-address"
             autoCapitalize="none"
           />
           <View style={styles.errorContainer}>
-            <Text style={styles.errorText}>{showLi('email')}</Text>
+            <Text style={styles.errorText}>{showSu('email')}</Text>
           </View>
 
-          <View style={styles.pwHeader}>
-            <Text style={styles.label}>Password</Text>
-            <Pressable hitSlop={10}>
-              <Text style={styles.forgotText}>Forgot?</Text>
-            </Pressable>
-          </View>
+          <Text style={[styles.label, { marginTop: 6 }]}>Password</Text>
           <View style={styles.pwContainer}>
             <TextInput
-              style={[styles.input, { paddingRight: 48, borderColor: showLi('pass') ? T.colors.errBorder : T.colors.fieldBorder }]}
-              value={li.pass}
-              onChangeText={(text) => setLi({ ...li, pass: text })}
-              onBlur={() => setLiT({ ...liT, pass: true })}
-              placeholder="Your password"
+              style={[styles.input, { paddingRight: 48, borderColor: showSu('pass') ? T.colors.errBorder : T.colors.fieldBorder }]}
+              value={su.pass}
+              onChangeText={(text) => setSu({ ...su, pass: text })}
+              onBlur={() => setSuT({ ...suT, pass: true })}
+              placeholder="At least 8 characters"
               placeholderTextColor="#9AA7BC"
               secureTextEntry={!showPw}
             />
@@ -129,23 +160,43 @@ export default function LoginScreen() {
               <View style={{ color: '#8494AB' }}><EyeIcon /></View>
             </Pressable>
           </View>
-          <View style={styles.errorContainer}>
-            <Text style={styles.errorText}>{showLi('pass')}</Text>
+
+          <View style={styles.pwMetaContainer}>
+            {!!su.pass && !showSu('pass') ? (
+              <>
+                <View style={styles.strengthBars}>
+                  {[0, 1, 2].map((i) => (
+                    <View key={i} style={[styles.strengthBar, { backgroundColor: i < strength ? sColor : '#E7ECF3' }]} />
+                  ))}
+                </View>
+                <Text style={[styles.strengthText, { color: sColor }]}>
+                  {sLabels[Math.max(0, strength - 1)]}
+                </Text>
+              </>
+            ) : (
+              <Text style={styles.errorText}>{showSu('pass')}</Text>
+            )}
           </View>
 
-          <Pressable style={styles.primaryBtn} onPress={submitLogin} disabled={submitting}>
-            <Text style={styles.primaryBtnText}>{submitting ? 'Signing in…' : 'Log in'}</Text>
-          </Pressable>
-
-          <View style={styles.footerContainer}>
-            <Text style={styles.footerText}>
-              New here?{' '}
-              <Text style={styles.footerLink} onPress={() => router.push('/(auth)/signup')}>
-                Create an account
-              </Text>
+          <Pressable style={styles.termsRow} onPress={() => setSu({ ...su, terms: !su.terms })}>
+            <View style={[styles.checkbox, { 
+              borderColor: showSu('terms') ? T.colors.errBorder : su.terms ? T.colors.blue : '#C4CFDE',
+              backgroundColor: su.terms ? T.colors.blue : T.colors.white
+            }]}>
+              {su.terms && <CheckIcon />}
+            </View>
+            <Text style={styles.termsText}>
+              I agree to the <Text style={styles.linkText}>Terms of Service</Text> and <Text style={styles.linkText}>e-Sign Consent</Text>.
             </Text>
-          </View>
+          </Pressable>
           
+          <View style={[styles.errorContainer, { paddingLeft: 33, minHeight: 16 }]}>
+            <Text style={styles.errorText}>{showSu('terms')}</Text>
+          </View>
+
+          <Pressable style={styles.primaryBtn} onPress={submitSignup} disabled={submitting}>
+            <Text style={styles.primaryBtnText}>{submitting ? 'Creating account…' : 'Create account'}</Text>
+          </Pressable>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -168,13 +219,16 @@ const styles = StyleSheet.create({
   input: { width: '100%', height: 52, paddingHorizontal: 16, borderRadius: 13, borderWidth: 1.5, backgroundColor: T.colors.white, fontFamily: T.fonts.jakarta.regular, fontSize: 15, color: T.colors.ink },
   errorContainer: { minHeight: 18, paddingTop: 4, paddingHorizontal: 2 },
   errorText: { fontFamily: T.fonts.jakarta.medium, fontSize: 12.5, color: T.colors.error },
-  pwHeader: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', marginTop: 6, marginBottom: 7 },
-  forgotText: { fontFamily: T.fonts.jakarta.semiBold, fontSize: 12.5, color: T.colors.blue },
   pwContainer: { position: 'relative' },
   eyeBtn: { position: 'absolute', right: 6, top: 6, width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  pwMetaContainer: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 18, paddingTop: 6, paddingHorizontal: 2 },
+  strengthBars: { flex: 1, flexDirection: 'row', gap: 4 },
+  strengthBar: { flex: 1, height: 3, borderRadius: 2 },
+  strengthText: { fontFamily: T.fonts.jakarta.semiBold, fontSize: 12 },
+  termsRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 11, marginTop: 10, marginBottom: 4 },
+  checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 1.5, marginTop: 1, alignItems: 'center', justifyContent: 'center' },
+  termsText: { flex: 1, fontFamily: T.fonts.jakarta.regular, fontSize: 13, color: T.colors.inkSoft, lineHeight: 19.5 },
+  linkText: { fontFamily: T.fonts.jakarta.semiBold, color: T.colors.blue },
   primaryBtn: { width: '100%', height: 56, marginTop: 12, borderRadius: 15, backgroundColor: T.colors.yellow, alignItems: 'center', justifyContent: 'center', shadowColor: '#FFC72C', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.32, shadowRadius: 24, elevation: 5 },
   primaryBtnText: { fontFamily: T.fonts.jakarta.bold, fontSize: 16, color: T.colors.navyInk },
-  footerContainer: { alignItems: 'center', marginTop: 22 },
-  footerText: { fontFamily: T.fonts.jakarta.regular, fontSize: 14, color: T.colors.inkSoft },
-  footerLink: { fontFamily: T.fonts.jakarta.bold, color: T.colors.blue },
 });
