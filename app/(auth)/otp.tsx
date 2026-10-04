@@ -1,15 +1,13 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { View, Text, StyleSheet, Pressable, TextInput, KeyboardAvoidingView, ScrollView, Platform } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { ActivityIndicator, View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import Svg, { Path, Rect } from 'react-native-svg';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { EndorseTokens as T } from '../../constants/EndorseTokens';
+import { useAuth } from '@/context/AuthContext';
+import { authErrorMessage } from '@/lib/authErrors';
 
-const BackIcon = () => (
-  <Svg width="18" height="16" viewBox="0 0 18 16" fill="none">
-    <Path d="M17 8H1M7 2 1 8l6 6" stroke="#1D3358" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-  </Svg>
-);
+const RESEND_COOLDOWN = 30;
 
 const MailIcon = () => (
   <Svg width="26" height="26" viewBox="0 0 24 24" fill="none">
@@ -18,15 +16,20 @@ const MailIcon = () => (
   </Svg>
 );
 
-export default function OtpScreen() {
+/**
+ * "Check your inbox" — Firebase emails a verification link on sign-up.
+ * The user confirms here once they've clicked it. (Route kept as /otp.)
+ */
+export default function VerifyEmailScreen() {
   const router = useRouter();
-  const { email } = useLocalSearchParams<{ email?: string }>();
-  
-  const [otp, setOtp] = useState(['', '', '', '', '', '']);
-  const [otpSubmit, setOtpSubmit] = useState(false);
-  const [resendIn, setResendIn] = useState(30);
-  const [submitting, setSubmitting] = useState(false);
-  const inputRefs = useRef<Array<TextInput | null>>([]);
+  const { email: emailParam } = useLocalSearchParams<{ email?: string }>();
+  const { user, refreshUser, sendVerification, logout } = useAuth();
+  const email = user?.email ?? emailParam ?? 'your email';
+
+  const [checking, setChecking] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [resendIn, setResendIn] = useState(RESEND_COOLDOWN);
 
   useEffect(() => {
     if (resendIn <= 0) return;
@@ -34,221 +37,129 @@ export default function OtpScreen() {
     return () => clearTimeout(t);
   }, [resendIn]);
 
-  const onOtp = (text: string, i: number) => {
-    const d = text.replace(/\D/g, '').slice(-1);
-    const newOtp = [...otp];
-    newOtp[i] = d;
-    setOtp(newOtp);
-
-    if (d && i < 5) {
-      inputRefs.current[i + 1]?.focus();
+  const handleVerified = async () => {
+    setError('');
+    setNotice('');
+    setChecking(true);
+    try {
+      const verified = await refreshUser();
+      if (verified) router.replace('/(auth)/signature');
+      else setError('We haven’t seen the confirmation yet. Open the link in the email, then try again.');
+    } catch (e) {
+      setError(authErrorMessage(e));
+    } finally {
+      setChecking(false);
     }
   };
 
-  const onOtpKey = (e: any, i: number) => {
-    if (e.nativeEvent.key === 'Backspace' && !otp[i] && i > 0) {
-      inputRefs.current[i - 1]?.focus();
+  const handleResend = async () => {
+    setError('');
+    try {
+      await sendVerification();
+      setNotice(`We sent a new link to ${email}.`);
+      setResendIn(RESEND_COOLDOWN);
+    } catch (e) {
+      setError(authErrorMessage(e));
     }
   };
 
-  const submitOtp = () => {
-    setOtpSubmit(true);
-    if (otp.join('').length === 6) {
-      setSubmitting(true);
-      // Simulate API call
-      setTimeout(() => {
-        setSubmitting(false);
-        router.push('/(auth)/signature');
-      }, 1000);
-    }
+  const useAnotherAccount = async () => {
+    await logout();
+    router.replace('/(auth)/login');
   };
-
-  const handleResend = () => {
-    setOtp(['', '', '', '', '', '']);
-    setResendIn(30);
-    inputRefs.current[0]?.focus();
-  };
-
-  const otpErr = otpSubmit && otp.join('').length < 6 ? 'Please enter all 6 digits' : '';
 
   return (
     <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView 
-        style={{ flex: 1 }} 
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        <ScrollView 
-          contentContainerStyle={styles.scrollContent}
-          keyboardShouldPersistTaps="handled"
-        >
-          <Pressable style={styles.backButton} onPress={() => router.back()}>
-            <BackIcon />
-          </Pressable>
+      <ScrollView contentContainerStyle={styles.scrollContent}>
+        <View style={styles.iconChip}>
+          <MailIcon />
+        </View>
 
-          <View style={styles.iconChip}>
-            <MailIcon />
-          </View>
+        <Text style={styles.title} accessibilityRole="header">
+          Verify your email
+        </Text>
+        <Text style={styles.subtitle}>
+          We sent a verification link to <Text style={styles.subtitleEmail}>{email}</Text>. Open it on any device, then come back
+          and continue.
+        </Text>
 
-          <Text style={styles.title}>Verify your email</Text>
-          <Text style={styles.subtitle}>
-            Enter the 6-digit code we sent to{' '}
-            <Text style={styles.subtitleEmail}>{email || 'you@email.com'}</Text>.
+        <View style={styles.tipCard}>
+          <Text style={styles.tipText}>Can’t find it? Check your spam or promotions folder. The link expires after a while, so request a new one if needed.</Text>
+        </View>
+
+        {error ? (
+          <Text style={styles.errorText} accessibilityLiveRegion="polite">
+            {error}
           </Text>
+        ) : null}
+        {notice ? (
+          <Text style={styles.noticeText} accessibilityLiveRegion="polite">
+            {notice}
+          </Text>
+        ) : null}
 
-          <View style={styles.otpContainer}>
-            {otp.map((v, i) => (
-              <TextInput
-                key={i}
-                ref={(ref) => (inputRefs.current[i] = ref)}
-                value={v}
-                onChangeText={(text) => onOtp(text, i)}
-                onKeyPress={(e) => onOtpKey(e, i)}
-                keyboardType="number-pad"
-                maxLength={1}
-                style={[
-                  styles.otpInput,
-                  {
-                    borderColor: otpErr && !v ? T.colors.errBorder : v ? T.colors.blue : T.colors.fieldBorder,
-                    backgroundColor: v ? '#F4F9FF' : T.colors.white,
-                  }
-                ]}
-              />
-            ))}
-          </View>
-          
-          <View style={styles.errorContainer}>
-            <Text style={styles.errorText}>{otpErr}</Text>
-          </View>
+        <Pressable
+          style={[styles.primaryButton, checking && styles.busy]}
+          onPress={handleVerified}
+          disabled={checking}
+          accessibilityRole="button"
+          accessibilityState={{ busy: checking }}>
+          {checking ? <ActivityIndicator color={T.colors.navyInk} /> : <Text style={styles.primaryButtonText}>I’ve verified my email</Text>}
+        </Pressable>
 
-          <Pressable style={styles.primaryButton} onPress={submitOtp} disabled={submitting}>
-            <Text style={styles.primaryButtonText}>
-              {submitting ? 'Verifying...' : 'Verify & continue'}
-            </Text>
-          </Pressable>
+        <View style={styles.resendContainer}>
+          <Text style={styles.resendText}>{resendIn > 0 ? `Resend available in ${resendIn}s` : 'Didn’t get it? '}</Text>
+          {resendIn <= 0 ? (
+            <Pressable onPress={handleResend} hitSlop={10} accessibilityRole="button">
+              <Text style={styles.resendLink}>Resend link</Text>
+            </Pressable>
+          ) : null}
+        </View>
 
-          <View style={styles.resendContainer}>
-            <Text style={styles.resendText}>
-              {resendIn === 0 ? "Didn't get it? " : `Resend available in ${resendIn}s`}
-            </Text>
-            {resendIn === 0 && (
-              <Pressable onPress={handleResend} hitSlop={10}>
-                <Text style={styles.resendLink}>Resend code</Text>
-              </Pressable>
-            )}
-          </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+        <Pressable onPress={useAnotherAccount} hitSlop={10} style={styles.switchAccount} accessibilityRole="button">
+          <Text style={styles.switchAccountText}>Use a different account</Text>
+        </Pressable>
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: T.colors.cloud,
-  },
-  scrollContent: {
-    paddingHorizontal: 26,
-    paddingTop: 6,
-    paddingBottom: 34,
-    flexGrow: 1,
-  },
-  backButton: {
-    width: 42,
-    height: 42,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: T.colors.border,
-    backgroundColor: T.colors.white,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 22,
-  },
+  container: { flex: 1, backgroundColor: T.colors.cloud },
+  scrollContent: { paddingHorizontal: 26, paddingTop: 48, paddingBottom: 34 },
   iconChip: {
-    width: 52,
-    height: 52,
-    borderRadius: 15,
+    width: 56,
+    height: 56,
+    borderRadius: 16,
     backgroundColor: T.colors.blueSoft,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 18,
+    marginBottom: 20,
   },
-  title: {
-    fontFamily: T.fonts.sora.semiBold,
-    fontSize: 28,
-    color: T.colors.ink,
-    marginBottom: 8,
-    letterSpacing: -0.5,
-  },
-  subtitle: {
-    fontFamily: T.fonts.jakarta.regular,
-    fontSize: 15,
-    color: T.colors.inkSoft,
-    marginBottom: 28,
-    lineHeight: 22.5,
-  },
-  subtitleEmail: {
-    fontFamily: T.fonts.jakarta.semiBold,
-    color: T.colors.ink,
-  },
-  otpContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-    gap: 9,
-  },
-  otpInput: {
-    flex: 1,
-    height: 60,
-    textAlign: 'center',
-    fontFamily: T.fonts.sora.semiBold,
-    fontSize: 24,
-    color: T.colors.ink,
-    borderRadius: 13,
-    borderWidth: 1.5,
-  },
-  errorContainer: {
-    minHeight: 20,
-    paddingTop: 4,
-    paddingHorizontal: 2,
-  },
-  errorText: {
-    fontFamily: T.fonts.jakarta.medium,
-    fontSize: 12.5,
-    color: T.colors.error,
-  },
+  title: { fontFamily: T.fonts.sora.semiBold, fontSize: 28, color: T.colors.ink, marginBottom: 8, letterSpacing: -0.5 },
+  subtitle: { fontFamily: T.fonts.jakarta.regular, fontSize: 15, color: T.colors.inkSoft, marginBottom: 20, lineHeight: 22.5 },
+  subtitleEmail: { fontFamily: T.fonts.jakarta.semiBold, color: T.colors.ink },
+  tipCard: { backgroundColor: T.colors.blueSoft, borderRadius: 14, padding: 14, marginBottom: 20 },
+  tipText: { fontFamily: T.fonts.jakarta.medium, fontSize: 13, color: T.colors.label, lineHeight: 19 },
+  errorText: { fontFamily: T.fonts.jakarta.medium, fontSize: 13, color: T.colors.error, marginBottom: 12, lineHeight: 19 },
+  noticeText: { fontFamily: T.fonts.jakarta.medium, fontSize: 13, color: T.colors.blue, marginBottom: 12 },
   primaryButton: {
-    width: '100%',
     height: 56,
-    marginTop: 10,
     borderRadius: 15,
     backgroundColor: T.colors.yellow,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#FFC72C',
+    shadowColor: T.colors.yellow,
     shadowOffset: { width: 0, height: 10 },
     shadowOpacity: 0.32,
     shadowRadius: 24,
     elevation: 5,
   },
-  primaryButtonText: {
-    fontFamily: T.fonts.jakarta.bold,
-    fontSize: 16,
-    color: T.colors.navyInk,
-  },
-  resendContainer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    marginTop: 22,
-  },
-  resendText: {
-    fontFamily: T.fonts.jakarta.regular,
-    fontSize: 14,
-    color: T.colors.inkSoft,
-  },
-  resendLink: {
-    fontFamily: T.fonts.jakarta.bold,
-    fontSize: 14,
-    color: T.colors.blue,
-  },
+  busy: { opacity: 0.7 },
+  primaryButtonText: { fontFamily: T.fonts.jakarta.bold, fontSize: 16, color: T.colors.navyInk },
+  resendContainer: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginTop: 22, minHeight: 44 },
+  resendText: { fontFamily: T.fonts.jakarta.regular, fontSize: 14, color: T.colors.inkSoft },
+  resendLink: { fontFamily: T.fonts.jakarta.semiBold, fontSize: 14, color: T.colors.blue },
+  switchAccount: { alignSelf: 'center', marginTop: 4, minHeight: 44, justifyContent: 'center' },
+  switchAccountText: { fontFamily: T.fonts.jakarta.semiBold, fontSize: 14, color: T.colors.inkSoft },
 });

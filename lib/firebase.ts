@@ -1,9 +1,10 @@
 import { initializeApp } from "firebase/app";
 import { getFunctions } from "firebase/functions";
 import { getAnalytics, isSupported } from "firebase/analytics";
-import { initializeAuth, getReactNativePersistence } from "firebase/auth";
+import { getAuth, initializeAuth, getReactNativePersistence } from "firebase/auth";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { getFirestore } from "firebase/firestore";
+import { Platform } from "react-native";
+import { initializeFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 
 const firebaseConfig = {
@@ -25,10 +26,15 @@ export const functions = getFunctions(app, "us-central1");
 // Initialize Analytics (optional for mobile, needs isSupported check)
 export const analytics = isSupported().then(yes => yes ? getAnalytics(app) : null);
 
-export const auth = initializeAuth(app, {
-  persistence: getReactNativePersistence(AsyncStorage),
-});
-export const db = getFirestore(app);
+// getReactNativePersistence only exists in Firebase's React Native build;
+// on web, getAuth uses the browser's own persistence.
+export const auth = Platform.OS === "web"
+  ? getAuth(app)
+  : initializeAuth(app, {
+      persistence: getReactNativePersistence(AsyncStorage),
+    });
+// Optional fields are common in our records; drop `undefined` instead of throwing.
+export const db = initializeFirestore(app, { ignoreUndefinedProperties: true });
 export const storage = getStorage(app);
 
 export { app };

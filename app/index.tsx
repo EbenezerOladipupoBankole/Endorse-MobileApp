@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, View, Text, TouchableOpacity, Dimensions, StatusBar, Image, Platform } from 'react-native';
+import { StyleSheet, View, Text, TouchableOpacity, Dimensions, StatusBar, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import Animated, { 
@@ -12,14 +12,17 @@ import Animated, {
   FadeInDown,
   runOnJS
 } from 'react-native-reanimated';
-import { Shield, ArrowRight, LogIn, FileText, CheckCircle, Award } from 'lucide-react-native';
-import { LinearGradient } from 'expo-linear-gradient';
+import { ArrowRight, LogIn, FileText, CheckCircle, Award } from 'lucide-react-native';
+import { Logo } from '@/components/Logo';
+import { useAuth } from '@/context/AuthContext';
+import { mustVerifyEmail } from '@/lib/authPolicy';
 
-const { width, height } = Dimensions.get('window');
+const { width } = Dimensions.get('window');
 
 export default function WelcomeScreen() {
   const [showSplash, setShowSplash] = useState(true);
   const [isLoaded, setIsLoaded] = useState(false);
+  const { user, loading: authLoading, emailVerified } = useAuth();
   const splashOpacity = useSharedValue(1);
   const splashScale = useSharedValue(1);
   const progressWidth = useSharedValue(0);
@@ -37,7 +40,14 @@ export default function WelcomeScreen() {
     }, 1800);
 
     return () => clearTimeout(timer);
-  }, []);
+  }, [progressWidth]);
+
+  // Signed-in users see the logo, then go straight in (or finish verifying their email).
+  useEffect(() => {
+    if (!isLoaded || authLoading || !user) return;
+    if (!mustVerifyEmail(emailVerified)) router.replace('/(tabs)/home');
+    else router.replace({ pathname: '/(auth)/otp', params: { email: user.email ?? '' } });
+  }, [isLoaded, authLoading, user, emailVerified]);
 
   const handleProceed = () => {
     splashOpacity.value = withTiming(0, { duration: 550 }, (finished) => {
@@ -51,11 +61,6 @@ export default function WelcomeScreen() {
     imageOpacity.value = withDelay(100, withTiming(1, { duration: 800 }));
     imageTranslateY.value = withDelay(100, withSpring(0, { damping: 12 }));
   };
-
-  const animatedImageStyle = useAnimatedStyle(() => ({
-    opacity: imageOpacity.value,
-    transform: [{ translateY: imageTranslateY.value }],
-  }));
 
   const animatedSplashStyle = useAnimatedStyle(() => ({
     opacity: splashOpacity.value,
@@ -75,22 +80,22 @@ export default function WelcomeScreen() {
           {/* Header Section */}
           <Animated.View entering={FadeInDown.duration(600)} style={styles.header}>
             <View style={styles.logoRow}>
-              <View style={styles.logoBadge}>
-                <Shield color="#4F46E5" size={22} strokeWidth={2.5} />
-              </View>
-              <Text style={styles.logoText}>ENDORSE</Text>
+              <Logo size={72} style={styles.headerLogo} />
             </View>
           </Animated.View>
 
           {/* Custom Illustration Section */}
           <View style={styles.illustrationContainer}>
-            <Animated.View entering={FadeInDown.delay(300).duration(800)} style={[styles.floatingCard, styles.cardLeft]}>
-              <View style={styles.iconCircleBlue}>
-                <FileText color="#4F46E5" size={24} />
-              </View>
-              <View style={styles.cardTextContainer}>
-                <View style={styles.cardLineLong} />
-                <View style={styles.cardLineShort} />
+            {/* Entering animation on the wrapper, rotation on the card, so they don't fight over `transform`. */}
+            <Animated.View entering={FadeInDown.delay(300).duration(800)} style={styles.cardLeft}>
+              <View style={[styles.floatingCard, styles.cardLeftTilt]}>
+                <View style={styles.iconCircleBlue}>
+                  <FileText color="#0E68B4" size={24} />
+                </View>
+                <View style={styles.cardTextContainer}>
+                  <View style={styles.cardLineLong} />
+                  <View style={styles.cardLineShort} />
+                </View>
               </View>
             </Animated.View>
 
@@ -101,13 +106,15 @@ export default function WelcomeScreen() {
               <Text style={styles.cardCenterText}>Verified</Text>
             </Animated.View>
 
-            <Animated.View entering={FadeInDown.delay(700).duration(800)} style={[styles.floatingCard, styles.cardRight]}>
-              <View style={styles.iconCirclePurple}>
-                <Award color="#8B5CF6" size={24} />
-              </View>
-              <View style={styles.cardTextContainer}>
-                <View style={styles.cardLineLong} />
-                <View style={styles.cardLineShort} />
+            <Animated.View entering={FadeInDown.delay(700).duration(800)} style={styles.cardRight}>
+              <View style={[styles.floatingCard, styles.cardRightTilt]}>
+                <View style={styles.iconCirclePurple}>
+                  <Award color="#8B5CF6" size={24} />
+                </View>
+                <View style={styles.cardTextContainer}>
+                  <View style={styles.cardLineLong} />
+                  <View style={styles.cardLineShort} />
+                </View>
               </View>
             </Animated.View>
           </View>
@@ -142,7 +149,7 @@ export default function WelcomeScreen() {
                 onPress={() => router.push('/(auth)/login')}
                 activeOpacity={0.6}
               >
-                <LogIn color="#1E1B4B" size={20} style={{ marginRight: 8 }} />
+                <LogIn color="#14213D" size={20} style={{ marginRight: 8 }} />
                 <Text style={styles.secondaryButtonText}>Log in to your account</Text>
               </TouchableOpacity>
             </Animated.View>
@@ -154,10 +161,7 @@ export default function WelcomeScreen() {
         <Animated.View style={[StyleSheet.absoluteFill, styles.splashContainer, animatedSplashStyle]}>
           <View style={styles.splashGradient}>
             <View style={styles.splashContent}>
-              <View style={styles.splashIconCircle}>
-                <Shield color="#4F46E5" size={48} strokeWidth={2.2} />
-              </View>
-              <Text style={styles.splashTitle}>ENDORSE</Text>
+              <Logo size={220} />
               <Text style={styles.splashSubtitle}>VERIFIABLE TRUST PLATFORM</Text>
             </View>
             <View style={styles.splashFooter}>
@@ -211,21 +215,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
   },
-  logoBadge: {
-    width: 38,
-    height: 38,
-    borderRadius: 10,
-    backgroundColor: '#EEF2FF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(79, 70, 229, 0.08)',
-  },
-  logoText: {
-    fontSize: 20,
-    fontWeight: '950',
-    color: '#1E1B4B',
-    letterSpacing: 3,
+  headerLogo: {
+    marginVertical: -14,
+    marginLeft: -8,
   },
   illustrationContainer: {
     flex: 1,
@@ -240,27 +232,33 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderRadius: 18,
     padding: 16,
-    shadowColor: '#1E1B4B',
+    shadowColor: '#14213D',
     shadowOffset: { width: 0, height: 12 },
     shadowOpacity: 0.06,
     shadowRadius: 24,
     elevation: 8,
-    position: 'absolute',
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
   },
   cardLeft: {
+    position: 'absolute',
     left: width * 0.02,
     top: '10%',
+  },
+  cardLeftTilt: {
     transform: [{ rotate: '-6deg' }],
   },
   cardRight: {
+    position: 'absolute',
     right: width * 0.02,
     bottom: '10%',
+  },
+  cardRightTilt: {
     transform: [{ rotate: '6deg' }],
   },
   cardCenter: {
+    position: 'absolute',
     zIndex: 10,
     paddingVertical: 20,
     paddingHorizontal: 28,
@@ -272,7 +270,7 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#E7F0FA',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -323,13 +321,13 @@ const styles = StyleSheet.create({
   headline: {
     fontSize: 38,
     fontWeight: '900',
-    color: '#1E1B4B',
+    color: '#14213D',
     lineHeight: 44,
     marginBottom: 12,
     letterSpacing: -1,
   },
   headlineHighlight: {
-    color: '#4F46E5',
+    color: '#0E68B4',
   },
   subheadline: {
     fontSize: 15,
@@ -343,14 +341,14 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   primaryButton: {
-    backgroundColor: '#4F46E5',
+    backgroundColor: '#0E68B4',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 18,
     borderRadius: 16,
     gap: 8,
-    shadowColor: '#4F46E5',
+    shadowColor: '#0E68B4',
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.2,
     shadowRadius: 12,
@@ -372,7 +370,7 @@ const styles = StyleSheet.create({
     borderColor: '#E2E8F0',
   },
   secondaryButtonText: {
-    color: '#1E1B4B',
+    color: '#14213D',
     fontSize: 16,
     fontWeight: '800',
   },
@@ -393,28 +391,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     width: '100%',
   },
-  splashIconCircle: {
-    width: 110,
-    height: 110,
-    borderRadius: 55,
-    backgroundColor: '#EEF2FF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 24,
-    borderWidth: 1,
-    borderColor: 'rgba(79, 70, 229, 0.08)',
-  },
-  splashTitle: {
-    fontSize: 32,
-    fontWeight: '950',
-    color: '#1E1B4B',
-    letterSpacing: 8,
-    marginBottom: 8,
-  },
   splashSubtitle: {
     fontSize: 10,
     fontWeight: '800',
-    color: '#4F46E5',
+    color: '#0E68B4',
     letterSpacing: 4,
     opacity: 0.8,
   },
@@ -432,7 +412,7 @@ const styles = StyleSheet.create({
   },
   progressBarFill: {
     height: '100%',
-    backgroundColor: '#4F46E5',
+    backgroundColor: '#0E68B4',
   },
   progressBarLabel: {
     fontSize: 11,
@@ -442,7 +422,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   splashProceedBtn: {
-    backgroundColor: '#4F46E5',
+    backgroundColor: '#0E68B4',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -450,7 +430,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 36,
     borderRadius: 14,
     gap: 8,
-    shadowColor: '#4F46E5',
+    shadowColor: '#0E68B4',
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.25,
     shadowRadius: 12,
@@ -459,7 +439,7 @@ const styles = StyleSheet.create({
   splashProceedText: {
     color: '#FFFFFF',
     fontSize: 15,
-    fontWeight: '950',
+    fontWeight: '900',
     letterSpacing: 1.5,
   },
 });

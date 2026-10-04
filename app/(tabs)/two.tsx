@@ -1,352 +1,235 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { StyleSheet, TouchableOpacity, ScrollView, TextInput, FlatList, Alert } from 'react-native';
-import { Text, View } from '@/components/Themed';
-import { Search, Filter, FileText, ChevronRight, MoreHorizontal, Download, Share2, Trash2, Plus, FileUp } from 'lucide-react-native';
-import { router } from 'expo-router';
-import Colors from '@/constants/Colors';
-import { useColorScheme } from '@/components/useColorScheme';
-import * as DocumentPicker from 'expo-document-picker';
-import { LinearGradient } from 'expo-linear-gradient';
-import { db } from '../../lib/firebase';
-import { collection, query, where, orderBy, onSnapshot } from 'firebase/firestore';
-import { useAuth } from '../../context/AuthContext';
+import { router, useFocusEffect } from 'expo-router';
+import { FileText, FileUp, SearchX } from 'lucide-react-native';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { Alert, FlatList, RefreshControl, StyleSheet, View, type ListRenderItem } from 'react-native';
 
-const CATEGORIES = ['All', 'Recent', 'Signed', 'Pending'];
+import { DocumentActionsSheet } from '@/components/dashboard/DocumentActionsSheet';
+import { DocumentListItem, DocumentListItemSkeleton } from '@/components/dashboard/DocumentListItem';
+import { Chip, ChipRow } from '@/components/ui/Chip';
+import { Screen } from '@/components/ui/Screen';
+import { HeaderIconButton } from '@/components/ui/ScreenHeader';
+import { EmptyState, ErrorState } from '@/components/ui/StateViews';
+import { TextField } from '@/components/ui/TextField';
+import { Typography } from '@/components/ui/Typography';
+import { useCreateActions } from '@/hooks/useCreateActions';
+import { useResource } from '@/hooks/useResource';
+import { performDocumentAction } from '@/lib/dashboard/api';
+import { matchesFilter, STATUS_FILTER_META } from '@/lib/dashboard/format';
+import { listDocumentSummaries } from '@/lib/firestore/documents';
+import { triggerHaptic } from '@/lib/haptics';
+import { buildDocumentPdf } from '@/lib/pdf/signedPdf';
+import { shareFile } from '@/lib/share';
+import { useTheme } from '@/theme';
+import type { DocumentAction, DocumentSummary, StatusFilter } from '@/types/dashboard';
+
+const FILTERS: StatusFilter[] = ['awaiting_me', 'waiting_on_others', 'completed', 'draft', 'expiring_soon'];
+
+const keyExtractor = (doc: DocumentSummary) => doc.id;
 
 export default function DocumentsScreen() {
-  const colorScheme = useColorScheme() ?? 'light';
-  const tint = '#4F46E5';
-  const isDark = colorScheme === 'dark';
-  
-  const [selectedCategory, setSelectedCategory] = useState('All');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [isProcessingUI, setIsProcessingUI] = useState(false);
-  const isPickingDocument = useRef(false);
+  const { spacing } = useTheme();
+  const runCreateAction = useCreateActions();
+  const { resource, reload } = useResource(listDocumentSummaries);
+  const [refreshing, setRefreshing] = useState(false);
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<StatusFilter | null>(null);
+  const [menuDoc, setMenuDoc] = useState<DocumentSummary | null>(null);
+  const [menuVisible, setMenuVisible] = useState(false);
+  const pendingAction = useRef<DocumentAction | null>(null);
+  const firstFocus = useRef(true);
 
-  const INITIAL_DOCS = [
-    { id: '1', name: 'Service_Agreement_v2.pdf', date: '2024-03-24', size: '1.2 MB', status: 'Signed' },
-    { id: '2', name: 'NDA_Draft.docx', date: '2024-03-23', size: '850 KB', status: 'Pending' },
-    { id: '3', name: 'Lease_Agreement.pdf', date: '2024-03-21', size: '2.4 MB', status: 'Signed' },
-    { id: '4', name: 'Freelance_Contract.pdf', date: '2024-03-18', size: '1.8 MB', status: 'Signed' },
-    { id: '5', name: 'Investor_Deck.pdf', date: '2024-03-15', size: '12.4 MB', status: 'Pending' },
-  ];
+  // Pick up documents created or signed on other screens.
+  useFocusEffect(
+    useCallback(() => {
+      if (firstFocus.current) {
+        firstFocus.current = false;
+        return;
+      }
+      reload();
+    }, [reload]),
+  );
 
-  const { user } = useAuth();
-  const [documents, setDocuments] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const docs = resource.data;
+  const now = resource.fetchedAt ?? 0;
+  const term = query.trim().toLowerCase();
 
-  useEffect(() => {
-    if (!user) {
-      setDocuments(INITIAL_DOCS);
-      setIsLoading(false);
+  const counts = useMemo(() => {
+    const out = {} as Record<StatusFilter, number>;
+    FILTERS.forEach((f) => (out[f] = (docs ?? []).filter((d) => matchesFilter(d, f)).length));
+    return out;
+  }, [docs]);
+
+  const visible = useMemo(
+    () =>
+      (docs ?? []).filter(
+        (d) =>
+          (!filter || matchesFilter(d, filter)) &&
+          (!term || d.title.toLowerCase().includes(term) || d.recipients.some((r) => r.name.toLowerCase().includes(term))),
+      ),
+    [docs, filter, term],
+  );
+
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    triggerHaptic('light');
+    reload();
+    // useResource reloads asynchronously; give the spinner a moment.
+    setTimeout(() => setRefreshing(false), 600);
+  }, [reload]);
+
+  const openDoc = useCallback((doc: DocumentSummary) => {
+    router.push({ pathname: '/document/[id]', params: { id: doc.id } });
+  }, []);
+
+  const openMenu = useCallback((doc: DocumentSummary) => {
+    setMenuDoc(doc);
+    setMenuVisible(true);
+  }, []);
+
+  const handleMenuDismissed = useCallback(() => {
+    const action = pendingAction.current;
+    pendingAction.current = null;
+    if (!action || !menuDoc) return;
+    if (action === 'share') {
+      // The signed PDF (original + signatures + certificate) via the system share sheet.
+      buildDocumentPdf(menuDoc.id)
+        .then((uri) => shareFile(uri, 'any', { title: menuDoc.title, message: `${menuDoc.title} — shared from Endorse` }))
+        .catch((e: unknown) => Alert.alert('Couldn’t share', e instanceof Error ? e.message : 'Please try again.'));
       return;
     }
+    const run = () =>
+      performDocumentAction(menuDoc.id, action)
+        .then(() => {
+          triggerHaptic('success');
+          if (action !== 'download') reload();
+        })
+        .catch((e: unknown) => Alert.alert('Something went wrong', e instanceof Error ? e.message : 'Please try again.'));
+    if (action === 'void') {
+      Alert.alert('Void this document?', 'All recipients will be notified and can no longer sign.', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Void', style: 'destructive', onPress: run },
+      ]);
+    } else run();
+  }, [menuDoc, reload]);
 
-    const q = query(
-      collection(db, 'endorsements'),
-      where('signerId', '==', user.uid),
-      orderBy('createdAt', 'desc')
-    );
+  const renderItem = useCallback<ListRenderItem<DocumentSummary>>(
+    ({ item, index }) => (
+      <DocumentListItem
+        doc={item}
+        now={now}
+        isFirst={index === 0}
+        isLast={index === visible.length - 1}
+        onPress={openDoc}
+        onMore={openMenu}
+      />
+    ),
+    [now, visible.length, openDoc, openMenu],
+  );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const dbDocs = snapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          name: data.documentName || 'Untitled.pdf',
-          date: data.createdAt ? new Date(data.createdAt).toISOString().split('T')[0] : 'Unknown',
-          size: data.size || '1.2 MB',
-          status: data.status || 'Pending',
-          uri: data.fileUri || data.localUri,
-        };
-      });
-      // Merge Firestore documents with initial static docs
-      setDocuments(dbDocs.length > 0 ? [...dbDocs, ...INITIAL_DOCS] : INITIAL_DOCS);
-      setIsLoading(false);
-    }, (error) => {
-      console.error("Error fetching endorsements in two.tsx:", error);
-      setDocuments(INITIAL_DOCS);
-      setIsLoading(false);
-    });
-
-    return () => unsubscribe();
-  }, [user]);
-
-  const filteredDocuments = documents.filter(doc => {
-    const matchesSearch = doc.name.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesCategory = selectedCategory === 'All' || doc.status === selectedCategory;
-    return matchesSearch && matchesCategory;
-  });
-
-  const handlePickDocument = async () => {
-    if (isPickingDocument.current) return;
-    isPickingDocument.current = true;
-    setIsProcessingUI(true);
-    
-    try {
-      const result = await DocumentPicker.getDocumentAsync({ 
-        type: 'application/pdf',
-        copyToCacheDirectory: true 
-      });
-      
-      if (!result.canceled) {
-        router.push({ pathname: '/sign/[id]', params: { id: 'new', name: result.assets[0].name } });
-      }
-    } catch (err) {
-      console.error('Error picking document:', err);
-    } finally {
-      setTimeout(() => {
-        isPickingDocument.current = false;
-        setIsProcessingUI(false);
-      }, 800);
+  const empty = () => {
+    if (!docs) {
+      if (resource.status === 'error') return <ErrorState title="Couldn't load your documents" message={resource.error} onRetry={reload} />;
+      return (
+        <View>
+          {[0, 1, 2, 3].map((i) => (
+            <DocumentListItemSkeleton key={i} isFirst={i === 0} isLast={i === 3} />
+          ))}
+        </View>
+      );
     }
+    if (docs.length === 0) {
+      return (
+        <EmptyState
+          icon={FileText}
+          title="No documents yet"
+          message="Upload or scan a document to sign it, or send one for signature."
+          actionLabel="Upload a document"
+          onAction={() => runCreateAction('upload')}
+        />
+      );
+    }
+    return (
+      <EmptyState
+        compact
+        icon={SearchX}
+        title="No matching documents"
+        message="Try a different search or filter."
+        actionLabel="Clear filters"
+        onAction={() => {
+          setQuery('');
+          setFilter(null);
+        }}
+      />
+    );
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: isDark ? '#0F172A' : '#FFFFFF' }]}>
-      {/* Header */}
-      <View style={[styles.header, { backgroundColor: isDark ? '#0F172A' : '#FFFFFF' }]}>
-        <Text style={[styles.title, { color: isDark ? '#FFF' : '#1E1B4B' }]}>Documents</Text>
-        <TouchableOpacity style={styles.uploadBtn} onPress={handlePickDocument}>
-            <FileUp size={18} color="#4F46E5" />
-            <Text style={styles.uploadBtnText}>Upload</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Search Section */}
-      <View style={styles.searchContainer}>
-        <View style={[styles.searchBar, { backgroundColor: isDark ? '#1E293B' : '#F1F5F9' }]}>
-          <Search size={18} color="#94A3B8" />
-          <TextInput
-            style={[styles.searchInput, { color: isDark ? '#FFF' : '#1E1B4B' }]}
-            placeholder="Search documents..."
-            placeholderTextColor="#94A3B8"
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-          />
-          <Filter size={18} color="#94A3B8" />
+    <Screen>
+      <View style={[styles.header, { paddingHorizontal: spacing.xl }]}>
+        <View style={styles.flex}>
+          <Typography variant="title1" accessibilityRole="header">
+            Documents
+          </Typography>
+          <Typography variant="caption" tone="textSecondary">
+            {docs ? `${docs.length} ${docs.length === 1 ? 'document' : 'documents'}` : 'Loading…'}
+          </Typography>
         </View>
+        <HeaderIconButton icon={FileUp} label="Upload a document" onPress={() => runCreateAction('upload')} />
       </View>
 
-      {/* Categories */}
-      <View style={styles.categoriesContainer}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoriesContent}>
-          {CATEGORIES.map((cat) => (
-            <TouchableOpacity 
-              key={cat} 
-              style={[
-                styles.categoryChip, 
-                selectedCategory === cat && { backgroundColor: tint }
-              ]}
-              onPress={() => setSelectedCategory(cat)}
-            >
-              <Text style={[
-                styles.categoryText,
-                selectedCategory === cat ? { color: '#FFF' } : { color: isDark ? '#94A3B8' : '#64748B' }
-              ]}>{cat}</Text>
-            </TouchableOpacity>
+      <View style={{ paddingHorizontal: spacing.xl, paddingBottom: spacing.md }}>
+        <TextField
+          label="Search"
+          value={query}
+          onChangeText={setQuery}
+          placeholder="Search by title or recipient"
+          autoCapitalize="none"
+          autoCorrect={false}
+          returnKeyType="search"
+        />
+      </View>
+
+      <View style={{ paddingBottom: spacing.md }}>
+        <ChipRow>
+          <Chip label="All" selected={!filter} onPress={() => setFilter(null)} count={docs?.length} />
+          {FILTERS.map((f) => (
+            <Chip
+              key={f}
+              label={STATUS_FILTER_META[f].shortLabel}
+              selected={filter === f}
+              count={docs ? counts[f] : undefined}
+              onPress={() => setFilter(filter === f ? null : f)}
+            />
           ))}
-        </ScrollView>
+        </ChipRow>
       </View>
 
-      {/* Results List */}
       <FlatList
-        data={filteredDocuments}
-        keyExtractor={(item) => item.id}
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.listContent}
-        ListEmptyComponent={() => (
-           <View style={styles.emptyContainer}>
-              <FileText size={48} color="#94A3B8" />
-              <Text style={styles.emptyText}>No documents found</Text>
-           </View>
-        )}
-        renderItem={({ item }) => (
-          <TouchableOpacity 
-            style={[styles.docCard, { backgroundColor: isDark ? '#1E293B' : '#F8FAFC' }]}
-            onPress={() => {
-              if (item.status === 'Pending') {
-                router.push({ 
-                  pathname: '/sign/[id]', 
-                  params: { id: item.id, name: item.name, uri: (item as any).uri } 
-                });
-              }
-            }}
-          >
-            <View style={styles.docMainInfo}>
-              <View style={[styles.docIcon, { backgroundColor: '#FFFFFF' }]}>
-                <FileText size={22} color={item.status === 'Signed' ? '#22C55E' : tint} />
-              </View>
-              <View style={styles.docText}>
-                <Text style={[styles.docName, { color: isDark ? '#FFF' : '#1E1B4B' }]} numberOfLines={1}>{item.name}</Text>
-                <View style={styles.metaRow}>
-                   <View style={[styles.statusDot, { backgroundColor: item.status === 'Signed' ? '#22C55E' : '#F59E0B' }]} />
-                   <Text style={[styles.docMeta, { color: isDark ? '#94A3B8' : '#64748B' }]}>{item.status} • {item.date}</Text>
-                </View>
-              </View>
-              <TouchableOpacity style={styles.moreButton}>
-                <MoreHorizontal size={20} color="#94A3B8" />
-              </TouchableOpacity>
-            </View>
-          </TouchableOpacity>
-        )}
+        data={visible}
+        keyExtractor={keyExtractor}
+        renderItem={renderItem}
+        ListEmptyComponent={empty}
+        contentContainerStyle={{ paddingBottom: spacing.huge }}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />}
       />
 
-      {/* Floating Action Button */}
-      <TouchableOpacity style={styles.fab} onPress={handlePickDocument}>
-         <LinearGradient colors={['#4F46E5', '#6366F1']} style={styles.fabGradient}>
-            <Plus size={28} color="#FFF" />
-         </LinearGradient>
-      </TouchableOpacity>
-    </View>
+      <DocumentActionsSheet
+        doc={menuDoc}
+        visible={menuVisible}
+        onRequestClose={() => setMenuVisible(false)}
+        onDismissed={handleMenuDismissed}
+        onAction={(action) => {
+          pendingAction.current = action;
+          setMenuVisible(false);
+        }}
+      />
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingTop: 60,
-    paddingBottom: 20,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: '900',
-    letterSpacing: -1,
-  },
-  uploadBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#EEF2FF',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 10,
-    gap: 6,
-  },
-  uploadBtnText: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#4F46E5',
-  },
-  searchContainer: {
-    paddingHorizontal: 24,
-    marginBottom: 20,
-  },
-  searchBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    height: 52,
-    borderRadius: 14,
-    gap: 12,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  categoriesContainer: {
-    marginBottom: 24,
-  },
-  categoriesContent: {
-    paddingHorizontal: 24,
-    gap: 10,
-  },
-  categoryChip: {
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 12,
-    backgroundColor: '#F8FAFC',
-    borderWidth: 1,
-    borderColor: '#F1F5F9',
-  },
-  categoryText: {
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  listContent: {
-    paddingHorizontal: 24,
-    paddingBottom: 120,
-  },
-  docCard: {
-    padding: 18,
-    borderRadius: 18,
-    marginBottom: 16,
-  },
-  docMainInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 16,
-    backgroundColor: 'transparent',
-  },
-  docIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  docText: {
-    flex: 1,
-    backgroundColor: 'transparent',
-  },
-  docName: {
-    fontSize: 15,
-    fontWeight: '800',
-    marginBottom: 4,
-  },
-  metaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: 'transparent',
-  },
-  statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  docMeta: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  moreButton: {
-    padding: 4,
-  },
-  emptyContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 100,
-    gap: 16,
-    backgroundColor: 'transparent',
-  },
-  emptyText: {
-    fontSize: 16,
-    color: '#94A3B8',
-    fontWeight: '700',
-  },
-  fab: {
-    position: 'absolute',
-    bottom: 32,
-    right: 32,
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    elevation: 4,
-    shadowColor: '#4F46E5',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
-  },
-  fabGradient: {
-    flex: 1,
-    borderRadius: 30,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  flex: { flex: 1 },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingTop: 8, paddingBottom: 12 },
 });

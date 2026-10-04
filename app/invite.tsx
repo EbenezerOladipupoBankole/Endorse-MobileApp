@@ -14,7 +14,7 @@ export default function InviteSignerScreen() {
   const handleSendInvite = () => {
     // Logic to send invite would go here
     router.replace({
-      pathname: '/(tabs)',
+      pathname: '/(tabs)/home',
       params: { success: 'true', message: 'Invite sent to ' + email }
     });
   };
@@ -26,7 +26,7 @@ export default function InviteSignerScreen() {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity 
-          onPress={() => router.canGoBack() ? router.back() : router.replace('/(tabs)')} 
+          onPress={() => router.canGoBack() ? router.back() : router.replace('/(tabs)/home')} 
           style={styles.closeButton}
         >
           <X size={28} color="#1E1B4B" />

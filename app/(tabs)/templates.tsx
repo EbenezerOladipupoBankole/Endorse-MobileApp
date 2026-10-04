@@ -1,323 +1,299 @@
-import React, { useState } from 'react';
-import { StyleSheet, TouchableOpacity, FlatList, TextInput, View, Text, Modal, Platform } from 'react-native';
-import { Search, Plus, MoreHorizontal, FileText, X, PenTool, Copy, Trash2, Edit3, ArrowUpRight } from 'lucide-react-native';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
+import { BookOpen, CircleX, Copy, LayoutTemplate, Pencil, Plus, Search, SearchX, Send, Trash2 } from 'lucide-react-native';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { Alert, FlatList, Platform, Pressable, RefreshControl, StyleSheet, TextInput, View, type ListRenderItem } from 'react-native';
 
-const REAL_TEMPLATES = [
-  { id: 't1', name: 'Non-Disclosure Agreement', category: 'Legal', date: 'Oct 12', uses: 124 },
-  { id: 't2', name: 'Independent Contractor', category: 'HR', date: 'Sep 28', uses: 89 },
-  { id: 't3', name: 'Standard Sales Contract', category: 'Sales', date: 'Nov 02', uses: 256 },
-  { id: 't4', name: 'Employee Onboarding', category: 'HR', date: 'Aug 15', uses: 42 },
-  { id: 't5', name: 'Vendor Service Agreement', category: 'Ops', date: 'Oct 05', uses: 18 },
-  { id: 't6', name: 'Offer Letter', category: 'HR', date: 'Jan 10', uses: 310 },
-];
+import { AgreementPreview } from '@/components/templates/AgreementPreview';
+import { GridTemplateCard, GridTemplateCardSkeleton } from '@/components/templates/GridTemplateCard';
+import { CATEGORY_TONE } from '@/components/templates/templateMeta';
+import { BottomSheet } from '@/components/ui/BottomSheet';
+import { Chip, ChipRow } from '@/components/ui/Chip';
+import { ListOption } from '@/components/ui/ListOption';
+import { Screen } from '@/components/ui/Screen';
+import { HeaderIconButton } from '@/components/ui/ScreenHeader';
+import { EmptyState, ErrorState } from '@/components/ui/StateViews';
+import { Typography } from '@/components/ui/Typography';
+import { triggerHaptic } from '@/lib/haptics';
+import { deleteTemplate, duplicateTemplate, fetchTemplateDetail, fetchTemplateList } from '@/lib/templates/api';
+import { fontFamily, useTheme } from '@/theme';
+import type { AgreementTemplate, Resource, TemplateCategory } from '@/types/dashboard';
+import { TEMPLATE_CATEGORIES } from '@/types/workflows';
+
+type TemplateAction = 'use' | 'preview' | 'edit' | 'duplicate' | 'delete';
+type GridItem = AgreementTemplate | { id: '__spacer' };
+
+const SKELETONS = [0, 1, 2, 3];
+
+const isSpacer = (item: GridItem): item is { id: '__spacer' } => item.id === '__spacer';
+const keyExtractor = (item: GridItem) => item.id;
+
+function openEditor(id: string) {
+  router.push({ pathname: '/template/[id]', params: { id } });
+}
 
 export default function TemplatesScreen() {
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedTemplate, setSelectedTemplate] = useState<any>(null);
-  const [isActionModalOpen, setIsActionModalOpen] = useState(false);
+  const { colors, spacing, radius, shadows } = useTheme();
+  const [state, setState] = useState<Resource<AgreementTemplate[]>>({ status: 'loading' });
+  const [refreshing, setRefreshing] = useState(false);
+  const [query, setQuery] = useState('');
+  const [category, setCategory] = useState<TemplateCategory | null>(null);
 
-  const filteredTemplates = REAL_TEMPLATES.filter(t => 
-    t.name.toLowerCase().includes(searchQuery.toLowerCase())
+  const [selected, setSelected] = useState<AgreementTemplate | null>(null);
+  const [sheetVisible, setSheetVisible] = useState(false);
+  const pendingAction = useRef<TemplateAction | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const data = await fetchTemplateList();
+      setState({ status: 'success', data, fetchedAt: Date.now() });
+    } catch (error) {
+      setState((prev) => ({ ...prev, status: 'error', error: error instanceof Error ? error.message : 'Something went wrong' }));
+    }
+  }, []);
+
+  // Reload whenever the tab regains focus so edits from the editor show up.
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load]),
   );
 
-  const openActions = (template: any) => {
-    setSelectedTemplate(template);
-    setIsActionModalOpen(true);
-  };
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
+    triggerHaptic('light');
+    await load();
+    setRefreshing(false);
+  }, [load]);
 
-  const handleUseTemplate = (template: any) => {
-    router.push({ pathname: '/sign/[id]', params: { id: template.id, name: template.name } });
-  };
+  const retry = useCallback(() => {
+    setState({ status: 'loading' });
+    load();
+  }, [load]);
 
-  const TemplateItem = ({ item }: { item: typeof REAL_TEMPLATES[0] }) => (
-    <TouchableOpacity 
-      style={styles.gridCard} 
-      activeOpacity={0.7}
-      onPress={() => handleUseTemplate(item)}
-    >
-      <View style={styles.cardHeader}>
-        <View style={styles.iconBox}>
-          <FileText size={24} color="#000000" />
-        </View>
-        <TouchableOpacity style={styles.moreBtn} onPress={() => openActions(item)}>
-          <MoreHorizontal size={20} color="#9CA3AF" />
-        </TouchableOpacity>
-      </View>
-      
-      <Text style={styles.templateName} numberOfLines={2}>{item.name}</Text>
-      
-      <View style={styles.cardFooter}>
-        <Text style={styles.categoryText}>{item.category}</Text>
-        <Text style={styles.usesText}>{item.uses} uses</Text>
-      </View>
-    </TouchableOpacity>
+  const templates = state.data;
+
+  const counts = useMemo(() => {
+    const map = new Map<TemplateCategory, number>();
+    templates?.forEach((t) => map.set(t.category, (map.get(t.category) ?? 0) + 1));
+    return map;
+  }, [templates]);
+
+  const filtered = useMemo<GridItem[]>(() => {
+    if (!templates) return [];
+    const q = query.trim().toLowerCase();
+    const items: GridItem[] = templates.filter(
+      (t) => (!category || t.category === category) && (!q || t.name.toLowerCase().includes(q) || t.category.toLowerCase().includes(q)),
+    );
+    // Keep the last card half-width when the count is odd.
+    if (items.length % 2 === 1) items.push({ id: '__spacer' });
+    return items;
+  }, [templates, query, category]);
+
+  const clearFilters = useCallback(() => {
+    setQuery('');
+    setCategory(null);
+  }, []);
+
+  const openActions = useCallback((template: AgreementTemplate) => {
+    setSelected(template);
+    setSheetVisible(true);
+  }, []);
+  const closeSheet = useCallback(() => setSheetVisible(false), []);
+  const [preview, setPreview] = useState<{ title: string; body?: string } | null>(null);
+  const chooseAction = useCallback((action: TemplateAction) => {
+    pendingAction.current = action;
+    setSheetVisible(false);
+  }, []);
+
+  // Runs once the action sheet has animated away.
+  const handleDismissed = useCallback(() => {
+    const action = pendingAction.current;
+    pendingAction.current = null;
+    const template = selected;
+    if (!action || !template) return;
+
+    switch (action) {
+      case 'use':
+        router.push({ pathname: '/send', params: { templateId: template.id, name: template.name } });
+        break;
+      case 'preview':
+        fetchTemplateDetail(template.id)
+          .then((detail) => setPreview({ title: detail.name, body: detail.body }))
+          .catch(() => Alert.alert('Could not open template', 'Please try again.'));
+        break;
+      case 'edit':
+        openEditor(template.id);
+        break;
+      case 'duplicate':
+        duplicateTemplate(template.id)
+          .then(() => {
+            triggerHaptic('success');
+            return load();
+          })
+          .catch(() => Alert.alert('Could not duplicate', 'Please try again.'));
+        break;
+      case 'delete':
+        Alert.alert(`Delete “${template.name}”?`, 'Documents already sent from this template are not affected.', [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Delete',
+            style: 'destructive',
+            onPress: () => {
+              deleteTemplate(template.id)
+                .then(() => {
+                  triggerHaptic('success');
+                  return load();
+                })
+                .catch(() => Alert.alert('Could not delete', 'Please try again.'));
+            },
+          },
+        ]);
+        break;
+    }
+  }, [selected, load]);
+
+  const renderItem = useCallback<ListRenderItem<GridItem>>(
+    ({ item }) => (isSpacer(item) ? <View style={styles.flex} /> : <GridTemplateCard template={item} onPress={openActions} />),
+    [openActions],
   );
 
-  return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.title}>Templates</Text>
-          <Text style={styles.subtitle}>Standardize your workflows</Text>
-        </View>
-        <TouchableOpacity style={styles.createBtn} onPress={() => router.push('/invite')}>
-          <Plus size={20} color="#FFFFFF" />
-          <Text style={styles.createBtnText}>New</Text>
-        </TouchableOpacity>
-      </View>
+  const subtitle = templates ? `${templates.length} ${templates.length === 1 ? 'template' : 'templates'}` : 'Loading…';
+  const selectedTone = selected ? colors.status[CATEGORY_TONE[selected.category]] : undefined;
 
-      <View style={styles.searchSection}>
-        <View style={styles.searchBar}>
-          <Search size={20} color="#9CA3AF" />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Search templates..."
-            placeholderTextColor="#9CA3AF"
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-          />
-        </View>
+  let body: React.ReactNode;
+  if (!templates && state.status === 'error') {
+    body = (
+      <View style={{ paddingTop: spacing.xl }}>
+        <ErrorState title="Couldn't load templates" message={state.error} onRetry={retry} />
       </View>
-
-      <FlatList
-        data={filteredTemplates}
-        renderItem={({ item }) => <TemplateItem item={item} />}
-        keyExtractor={item => item.id}
-        numColumns={2}
-        contentContainerStyle={styles.listContent}
-        columnWrapperStyle={styles.columnWrapper}
-        showsVerticalScrollIndicator={false}
-        ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <FileText size={48} color="#E5E7EB" />
-            <Text style={styles.emptyTitle}>No templates found</Text>
+    );
+  } else if (!templates) {
+    body = (
+      <View style={{ padding: spacing.xl, gap: spacing.md }} accessibilityLabel="Loading templates">
+        {[0, 2].map((row) => (
+          <View key={row} style={[styles.row, { gap: spacing.md }]}>
+            {SKELETONS.slice(row, row + 2).map((i) => (
+              <GridTemplateCardSkeleton key={i} />
+            ))}
           </View>
+        ))}
+      </View>
+    );
+  } else {
+    body = (
+      <FlatList
+        data={filtered}
+        keyExtractor={keyExtractor}
+        renderItem={renderItem}
+        numColumns={2}
+        columnWrapperStyle={{ gap: spacing.md }}
+        contentContainerStyle={[{ padding: spacing.xl, gap: spacing.md }, filtered.length === 0 && styles.grow]}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        showsVerticalScrollIndicator={false}
+        initialNumToRender={6}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.primary} colors={[colors.primary]} progressBackgroundColor={colors.surface} />
+        }
+        ListEmptyComponent={
+          templates.length === 0 ? (
+            <EmptyState
+              icon={LayoutTemplate}
+              title="No templates yet"
+              message="Save your go-to agreements once and send them in seconds."
+              actionLabel="Create template"
+              onAction={() => openEditor('new')}
+            />
+          ) : (
+            <EmptyState icon={SearchX} title="No matching templates" message="Try a different name or category." actionLabel="Clear filters" onAction={clearFilters} />
+          )
         }
       />
+    );
+  }
 
-      {/* Action Modal */}
-      <Modal visible={isActionModalOpen} transparent animationType="fade">
-        <TouchableOpacity 
-          style={styles.modalOverlay} 
-          activeOpacity={1} 
-          onPress={() => setIsActionModalOpen(false)}
-        >
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.modalTitle} numberOfLines={1}>{selectedTemplate?.name}</Text>
-                <Text style={styles.modalSubtitle}>{selectedTemplate?.category} Template</Text>
-              </View>
-              <TouchableOpacity onPress={() => setIsActionModalOpen(false)} style={styles.closeBtn}>
-                <X size={20} color="#6B7280" />
-              </TouchableOpacity>
-            </View>
+  return (
+    <Screen>
+      <View style={[styles.header, { paddingHorizontal: spacing.xl, paddingTop: spacing.sm }]}>
+        <View style={styles.flex}>
+          <Typography variant="title1" accessibilityRole="header">
+            Templates
+          </Typography>
+          <Typography variant="caption" tone="textSecondary">
+            {subtitle}
+          </Typography>
+          <Typography variant="caption" tone="textTertiary">
+            Starter templates are a starting point, not legal advice.
+          </Typography>
+        </View>
+        <HeaderIconButton icon={Plus} label="Create template" onPress={() => openEditor('new')} />
+      </View>
 
-            <View style={styles.modalBody}>
-               <ActionRow icon={ArrowUpRight} label="Use this Template" onPress={() => { setIsActionModalOpen(false); handleUseTemplate(selectedTemplate); }} />
-               <ActionRow icon={Edit3} label="Edit Layout" onPress={() => setIsActionModalOpen(false)} />
-               <ActionRow icon={Copy} label="Duplicate" onPress={() => setIsActionModalOpen(false)} />
-               <View style={styles.modalDivider} />
-               <ActionRow icon={Trash2} label="Delete Template" color="#EF4444" onPress={() => setIsActionModalOpen(false)} />
-            </View>
-          </View>
-        </TouchableOpacity>
-      </Modal>
-    </View>
+      <View style={{ paddingHorizontal: spacing.xl, paddingTop: spacing.lg, paddingBottom: spacing.md }}>
+        <View style={[styles.search, shadows.sm, { backgroundColor: colors.surface, borderColor: colors.border, borderRadius: radius.lg }]}>
+          <Search size={18} color={colors.textTertiary} />
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Search templates"
+            placeholderTextColor={colors.textTertiary}
+            autoCorrect={false}
+            autoCapitalize="none"
+            returnKeyType="search"
+            accessibilityLabel="Search templates"
+            style={[styles.input, { color: colors.text, fontFamily: fontFamily.medium }, Platform.OS === 'web' ? { outlineWidth: 0 } : null]}
+          />
+          {query.length > 0 ? (
+            <Pressable onPress={() => setQuery('')} hitSlop={10} accessibilityRole="button" accessibilityLabel="Clear search">
+              <CircleX size={18} color={colors.textTertiary} />
+            </Pressable>
+          ) : null}
+        </View>
+      </View>
+
+      <View>
+        <ChipRow>
+          <Chip label="All" selected={category === null} count={templates?.length} onPress={() => setCategory(null)} />
+          {TEMPLATE_CATEGORIES.map((c) => (
+            <Chip key={c} label={c} selected={category === c} count={counts.get(c) ?? 0} onPress={() => setCategory(category === c ? null : c)} />
+          ))}
+        </ChipRow>
+      </View>
+
+      <View style={styles.flex}>{body}</View>
+
+      <BottomSheet
+        visible={sheetVisible}
+        onRequestClose={closeSheet}
+        onDismissed={handleDismissed}
+        title={selected?.name ?? 'Template'}
+        subtitle={selected ? `${selected.category} · ${selected.fieldCount} fields` : undefined}>
+        <View style={{ paddingTop: spacing.sm }}>
+          <ListOption icon={Send} label="Use template" description="Fill in recipients and send for signature" tone={selectedTone} onPress={() => chooseAction('use')} />
+          <ListOption icon={BookOpen} label="Preview" description="Read the agreement and share it as a PDF" onPress={() => chooseAction('preview')} />
+          <ListOption
+            icon={Pencil}
+            label={selected?.builtIn ? 'Customize' : 'Edit'}
+            description={selected?.builtIn ? 'Save your own editable copy of this starter' : 'Change details, roles and fields'}
+            onPress={() => chooseAction('edit')}
+          />
+          <ListOption icon={Copy} label="Duplicate" description="Make a copy to customise" tone={colors.status.draft} onPress={() => chooseAction('duplicate')} />
+          {selected?.builtIn ? null : (
+            <ListOption icon={Trash2} label="Delete template" description="This can't be undone" destructive onPress={() => chooseAction('delete')} />
+          )}
+        </View>
+      </BottomSheet>
+
+      <AgreementPreview visible={!!preview} onClose={() => setPreview(null)} title={preview?.title ?? ''} body={preview?.body} />
+    </Screen>
   );
 }
 
-const ActionRow = ({ icon: Icon, label, onPress, color = '#000000' }: any) => (
-  <TouchableOpacity style={styles.actionRow} onPress={onPress}>
-    <Icon size={20} color={color} style={{ marginRight: 16 }} />
-    <Text style={[styles.actionLabel, { color }]}>{label}</Text>
-  </TouchableOpacity>
-);
-
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingTop: Platform.OS === 'ios' ? 60 : 40,
-    paddingBottom: 20,
-    backgroundColor: '#FFFFFF',
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: '#000000',
-    marginBottom: 4,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: '#6B7280',
-    fontWeight: '400',
-  },
-  createBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#000000',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 8,
-    gap: 8,
-  },
-  createBtnText: {
-    color: '#FFFFFF',
-    fontWeight: '600',
-    fontSize: 14,
-  },
-  searchSection: {
-    paddingHorizontal: 24,
-    paddingBottom: 20,
-    backgroundColor: '#FFFFFF',
-  },
-  searchBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F9FAFB',
-    height: 48,
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    gap: 12,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: 16,
-    color: '#000000',
-  },
-  listContent: {
-    paddingHorizontal: 24,
-    paddingBottom: 100,
-  },
-  columnWrapper: {
-    justifyContent: 'space-between',
-    marginBottom: 16,
-  },
-  gridCard: {
-    width: '47%',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-  },
-  cardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 16,
-  },
-  iconBox: {
-    width: 40,
-    height: 40,
-    borderRadius: 8,
-    backgroundColor: '#F9FAFB',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  moreBtn: {
-    padding: 4,
-    marginRight: -4,
-    marginTop: -4,
-  },
-  templateName: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#000000',
-    lineHeight: 20,
-    marginBottom: 16,
-    height: 40,
-  },
-  cardFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  categoryText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#6B7280',
-    textTransform: 'uppercase',
-  },
-  usesText: {
-    fontSize: 12,
-    color: '#9CA3AF',
-    fontWeight: '500',
-  },
-  emptyState: {
-    alignItems: 'center',
-    paddingTop: 60,
-  },
-  emptyTitle: {
-    marginTop: 16,
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#000000',
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'flex-end',
-  },
-  modalContent: {
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    paddingBottom: Platform.OS === 'ios' ? 40 : 24,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    padding: 24,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#000000',
-    marginBottom: 4,
-  },
-  modalSubtitle: {
-    fontSize: 14,
-    fontWeight: '400',
-    color: '#6B7280',
-  },
-  closeBtn: {
-    backgroundColor: '#F9FAFB',
-    padding: 8,
-    borderRadius: 16,
-  },
-  modalBody: {
-    padding: 16,
-  },
-  actionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-  },
-  actionLabel: {
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  modalDivider: {
-    height: 1,
-    backgroundColor: '#E5E7EB',
-    marginVertical: 4,
-    marginHorizontal: 16,
-  },
+  flex: { flex: 1 },
+  grow: { flexGrow: 1 },
+  row: { flexDirection: 'row' },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  search: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 48, paddingHorizontal: 14, borderWidth: 1 },
+  input: { flex: 1, fontSize: 15, paddingVertical: 10 },
 });
-

@@ -1,0 +1,18 @@
+rules_version = '2';
+
+// Endorse — Cloud Storage security rules.
+// Uploaded files live under documents/{uid}/. Recipients open them through the
+// tokenised download URL stored on the document, so only the owner needs access here.
+// Publish in the Firebase console (Storage → Rules) or with:
+//   firebase deploy --only storage
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /documents/{uid}/{allPaths=**} {
+      allow read, delete: if request.auth != null && request.auth.uid == uid;
+      // Documents and scans only, at most 25 MB. lib/storage.ts sets the content type.
+      allow create, update: if request.auth != null && request.auth.uid == uid
+        && request.resource.size < 25 * 1024 * 1024
+        && request.resource.contentType.matches('application/pdf|image/(png|jpeg|webp|heic)|application/msword|application/vnd[.]openxmlformats-officedocument[.]wordprocessingml[.]document');
+    }
+  }
+}

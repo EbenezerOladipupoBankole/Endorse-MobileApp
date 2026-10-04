@@ -9,12 +9,11 @@ export default function SignatureModal() {
   const ref = useRef<SignatureViewRef>(null);
   const [hasSignature, setHasSignature] = useState(false);
 
-  const handleOK = (signature: string) => {
-    console.log('Signature saved:', signature);
+  const handleOK = () => {
     if (router.canGoBack()) {
       router.back();
     } else {
-      router.replace('/(tabs)');
+      router.replace('/(tabs)/home');
     }
   };
 
@@ -41,7 +40,7 @@ export default function SignatureModal() {
       
       <View style={styles.header}>
         <TouchableOpacity 
-          onPress={() => router.canGoBack() ? router.back() : router.replace('/(tabs)')} 
+          onPress={() => router.canGoBack() ? router.back() : router.replace('/(tabs)/home')} 
           style={styles.closeButton}
         >
           <X size={24} color="#000" />

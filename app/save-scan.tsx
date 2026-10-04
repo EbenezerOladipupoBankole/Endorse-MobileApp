@@ -5,10 +5,9 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { ArrowLeft, Save, Share2, FileText, CheckCircle2, PenTool } from 'lucide-react-native';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
-import * as FileSystem from 'expo-file-system';
-import { db, storage } from '../lib/firebase';
-import { collection, addDoc } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import * as FileSystem from 'expo-file-system/legacy';
+import { createDocument } from '@/lib/firestore/documents';
+import { uploadUserFile } from '@/lib/storage';
 import { useAuth } from '../context/AuthContext';
 
 export default function SaveScanScreen() {
@@ -85,27 +84,19 @@ export default function SaveScanScreen() {
       
       // Attempt Firebase Storage Upload if user is logged in
       if (user) {
-        try {
-          const response = await fetch(pdfUri);
-          const blob = await response.blob();
-          const storageRef = ref(storage, `documents/${user.uid}/${permanentFilename}`);
-          await uploadBytes(storageRef, blob);
-          finalUrl = await getDownloadURL(storageRef);
-        } catch (uploadError) {
-          console.warn("Firebase Storage upload failed, falling back to local URI", uploadError);
-        }
+        // Falls back to the local copy if the upload fails.
+        finalUrl = (await uploadUserFile(user.uid, pdfUri, permanentFilename)) ?? permanentLocalUri;
       }
 
       // Save record to Firestore
       if (user) {
-        await addDoc(collection(db, 'endorsements'), {
-          signerId: user.uid,
-          documentName: documentName,
-          status: 'Pending',
-          createdAt: Date.now(),
+        // Saved as a draft the user can sign or send later.
+        await createDocument({
+          title: documentName,
+          status: 'draft',
+          signers: [],
           fileUri: finalUrl,
-          localUri: permanentLocalUri,
-          size: '1.2 MB', // estimate
+          fileType: 'pdf',
         });
       } else {
         console.log("No user logged in, saved locally at", permanentLocalUri);
@@ -169,7 +160,7 @@ export default function SaveScanScreen() {
               <Text style={styles.secondaryBtnText}>Share Document</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.doneBtn} onPress={() => router.replace('/(tabs)')}>
+            <TouchableOpacity style={styles.doneBtn} onPress={() => router.replace('/(tabs)/home')}>
               <Text style={styles.doneBtnText}>Back to Dashboard</Text>
             </TouchableOpacity>
           </View>
@@ -254,7 +245,7 @@ export default function SaveScanScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8FAFC',
+    backgroundColor: '#FFFFFF',
   },
   header: {
     flexDirection: 'row',

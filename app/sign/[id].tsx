@@ -1,663 +1,578 @@
-import React, { useState, useRef } from 'react';
-import { StyleSheet, TouchableOpacity, View, Text, Dimensions, Animated, Image, Platform, Modal, Alert, PanResponder } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, router } from 'expo-router';
-import { LinearGradient } from 'expo-linear-gradient';
-import { X, Check, PenTool, Download, Share2, ArrowLeft, RotateCcw, Save } from 'lucide-react-native';
-import { StatusBar } from 'expo-status-bar';
-import SignatureCanvas from 'react-native-signature-canvas';
+import { CircleCheck, Eraser, Minus, Move, PenLine, Plus, RefreshCw, RotateCcw, ShieldCheck } from 'lucide-react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Animated,
+  Image,
+  Modal,
+  PanResponder,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  View,
+  type LayoutChangeEvent,
+} from 'react-native';
+import SignatureCanvas, { type SignatureViewRef } from 'react-native-signature-canvas';
 import { WebView } from 'react-native-webview';
-import * as FileSystem from 'expo-file-system';
-import { db } from '../../lib/firebase';
-import { doc, updateDoc } from 'firebase/firestore';
 
-const { width, height } = Dimensions.get('window');
+import { Button } from '@/components/ui/Button';
+import { PressableScale } from '@/components/ui/PressableScale';
+import { Screen } from '@/components/ui/Screen';
+import { ShareActions } from '@/components/ui/ShareActions';
+import { goBack, HeaderIconButton, ScreenHeader } from '@/components/ui/ScreenHeader';
+import { StepIndicator } from '@/components/ui/StepIndicator';
+import { StickyFooter } from '@/components/ui/StickyFooter';
+import { Typography } from '@/components/ui/Typography';
+import { useAuth } from '@/context/AuthContext';
+import { useResource } from '@/hooks/useResource';
+import { fileTypeFor } from '@/lib/documents/api';
+import { isLocalFileUri } from '@/lib/fileUri';
+import {
+  createDocument,
+  documentFingerprint,
+  getDocumentRecord,
+  recordFileUri,
+  signDocument,
+  trustedSignatures,
+  type DocumentRecord,
+} from '@/lib/firestore/documents';
+import { triggerHaptic } from '@/lib/haptics';
+import { agreementPlainText } from '@/lib/pdf/agreement';
+import { createSignedPdf, PDF_UNSUPPORTED_ON_WEB, type PdfSignature, type SignaturePlacement } from '@/lib/pdf/signedPdf';
+import { makeId } from '@/lib/ids';
+import { requireUser } from '@/lib/session';
+import { uploadUserFile } from '@/lib/storage';
+import { useTheme, type Theme } from '@/theme';
 
-export default function SignDocumentScreen() {
-  const { id, name, uri } = useLocalSearchParams();
-  const [isSigned, setIsSigned] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [signatureUri, setSignatureUri] = useState<string | null>(null);
-  const [showSignPad, setShowSignPad] = useState(false);
-  const signatureRef = useRef<any>(null);
+const STEPS = ['Review', 'Place', 'Complete'];
+const SIGNATURE_BOX = { width: 180, height: 90 };
+const INITIAL_POSITION = { x: 40, y: 220 };
+const MIN_SCALE = 0.5;
+const MAX_SCALE = 2.2;
 
-  // Drag & Drop State
-  const pan = useRef(new Animated.ValueXY({ x: 40, y: 200 })).current;
-  const [signScale, setSignScale] = useState(1);
+type Phase = 'review' | 'placing' | 'processing' | 'signed';
 
-  const panResponder = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: () => true,
-      onPanResponderGrant: () => {
-        pan.setOffset({ x: (pan.x as any)._value, y: (pan.y as any)._value });
-      },
-      onPanResponderMove: Animated.event([null, { dx: pan.x, dy: pan.y }], { useNativeDriver: false }),
-      onPanResponderRelease: () => { pan.flattenOffset(); }
-    })
-  ).current;
+interface AuditRecord {
+  signer: string;
+  signedAt: number;
+  reference: string;
+}
 
-  // Animation for the "Signed" stamp
-  const scaleAnim = useRef(new Animated.Value(0)).current;
+/** Everything needed to (re)build the signed PDF after signing. */
+interface SignedInfo {
+  signatureDataUrl: string;
+  placement?: SignaturePlacement;
+  signedAt: number;
+  reference: string;
+}
 
-  const handleSignature = (signature: string) => {
-    setSignatureUri(signature);
-    setShowSignPad(false);
-  };
+type PdfState = { status: 'idle' | 'working' } | { status: 'ready'; uri: string } | { status: 'error'; error: string };
 
-  const confirmSignaturePlacement = async () => {
-    if (!signatureUri) return;
-    
-    setIsProcessing(true);
-    try {
-      // If we have a real document ID from firestore, update it
-      if (id && id !== 'new') {
-        const docRef = doc(db, 'endorsements', id as string);
-        await updateDoc(docRef, {
-          status: 'Completed',
-          signedAt: Date.now(),
-          signatureUri: signatureUri,
-        });
-      }
-      
-      // Keep the simulation delay for aesthetic transition
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      
-      setIsSigned(true);
-      Animated.spring(scaleAnim, {
-        toValue: 1,
-        tension: 50,
-        friction: 7,
-        useNativeDriver: true,
-      }).start();
-    } catch (err) {
-      console.error("Error signing document:", err);
-      Alert.alert("Signing Failed", "Could not verify and sign document.");
-    } finally {
-      setIsProcessing(false);
-    }
-  };
+const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
 
-  const clearSignPad = () => {
-    setSignatureUri(null);
-    setIsSigned(false);
-    scaleAnim.setValue(0);
-    pan.setValue({ x: 40, y: 200 });
-    setSignScale(1);
-  };
-
-  const openSignPad = () => {
-    if (!isSigned) {
-      setShowSignPad(true);
-    }
-  };
-
-
+/** Readable agreement text for template-based documents (headings in bold). */
+function AgreementText({ body }: { body: string }) {
+  const blocks = agreementPlainText(body.replace(/^## /gm, '\u0000')).split(/\n\s*\n/).filter((b) => b.trim());
   return (
-    <View style={styles.container}>
-      <StatusBar style="light" />
-      
-      {/* Premium Header */}
-      <LinearGradient colors={['#1E1B4B', '#2D286A']} style={styles.header}>
-        <SafeAreaView style={styles.headerContent}>
-          <TouchableOpacity 
-            onPress={() => router.canGoBack() ? router.back() : router.replace('/(tabs)')} 
-            style={styles.iconButton}
-          >
-            <ArrowLeft size={24} color="#FFF" />
-          </TouchableOpacity>
-          <View style={styles.titleContainer}>
-            <Text style={styles.docName} numberOfLines={1}>{name || 'Service_Agreement.pdf'}</Text>
-            <Text style={styles.statusSub}>{isSigned ? 'Digitally Verified' : 'Awaiting Finger Signature'}</Text>
-          </View>
-          <View style={{ width: 44 }} />
-        </SafeAreaView>
-      </LinearGradient>
-
-      {/* Document View Area */}
-      <View style={styles.canvas}>
-        <View style={styles.pageMock}>
-          {signatureUri && !isSigned && !isProcessing && (
-            <View style={styles.dragGuideBanner}>
-              <Text style={styles.dragGuideText}>👆 Drag signature to place • Use + / - to scale</Text>
-            </View>
-          )}
-          {/* Actual Document Preview */}
-          {uri || id !== 'new' ? (
-            <View style={{ flex: 1, overflow: 'hidden', borderRadius: 8, backgroundColor: '#F8FAFC' }}>
-              {(name as string)?.toLowerCase().endsWith('.pdf') ? (
-                uri ? (
-                  // Native PDF Viewer
-                  <WebView 
-                    source={{ uri: uri as string }} 
-                    style={{ flex: 1, width: '100%', height: '100%', backgroundColor: 'transparent' }}
-                    originWhitelist={['*']}
-                    allowFileAccess={true}
-                    allowFileAccessFromFileURLs={true}
-                    allowUniversalAccessFromFileURLs={true}
-                    scalesPageToFit={true}
-                  />
-                ) : (
-                  // Existing Doc Placeholder (No URI)
-                  <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 16 }}>
-                    <View style={{ padding: 24, backgroundColor: '#EEF2FF', borderRadius: 20 }}>
-                      <Check size={48} color="#4F46E5" />
-                    </View>
-                    <Text style={{ fontSize: 18, fontWeight: '800', color: '#1E1B4B' }}>{name}</Text>
-                    <Text style={{ color: '#64748B', fontWeight: '600' }}>Document Ready</Text>
-                  </View>
-                )
-              ) : (
-                // Image Render
-                <Image source={{ uri: uri as string }} style={{ flex: 1, width: '100%' }} resizeMode="contain" />
-              )}
-            </View>
-          ) : (
-            // Fallback for missing URI
-            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-               <Text style={{ color: '#94A3B8', fontWeight: '600' }}>Document loading failed.</Text>
-            </View>
-          )}
-
-          {/* Signature Result Overlay */}
-          {signatureUri && (
-            <Animated.View 
-              {...(isSigned ? {} : panResponder.panHandlers)}
-              style={[
-                styles.signatureResult, 
-                { 
-                  transform: [
-                    { translateX: pan.x },
-                    { translateY: pan.y },
-                    { scale: isSigned ? scaleAnim : signScale }
-                  ],
-                  borderWidth: isSigned ? 0 : 2,
-                  borderColor: isSigned ? 'transparent' : 'rgba(79, 70, 229, 0.5)',
-                  borderStyle: 'dashed',
-                }
-              ]}
-            >
-               <Image 
-                 source={{ uri: signatureUri }} 
-                 style={styles.signatureImage} 
-                 resizeMode="contain" 
-               />
-               {!isSigned && (
-                  <View style={styles.resizeControls}>
-                    <TouchableOpacity onPress={() => setSignScale(s => Math.max(0.4, s - 0.2))} style={styles.resizeBtn}>
-                      <Text style={styles.resizeText}>-</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={() => setSignScale(s => Math.min(2.5, s + 0.2))} style={styles.resizeBtn}>
-                      <Text style={styles.resizeText}>+</Text>
-                    </TouchableOpacity>
-                  </View>
-               )}
-               {isSigned && (
-                 <View style={styles.verifiedStamp}>
-                   <Check size={12} color="#FFF" strokeWidth={3} />
-                   <Text style={styles.stampText}>VERIFIED</Text>
-                 </View>
-               )}
-            </Animated.View>
-          )}
-
-          {isSigned && (
-             <View style={styles.auditLog}>
-                <Text style={styles.auditText}>SIGNER: Ebenezer Bankole</Text>
-                <Text style={styles.auditText}>DATE: {new Date().toLocaleDateString()}</Text>
-                <Text style={styles.auditText}>ID: END-{Math.floor(Math.random()*1000000)}</Text>
-             </View>
-          )}
-        </View>
-      </View>
-
-      {/* Global Bottom Actions */}
-      <View style={styles.footer}>
-        {isProcessing ? (
-          <View style={styles.processingState}>
-            <Text style={styles.processingText}>Securing cryptographic seal...</Text>
-          </View>
-        ) : isSigned ? (
-          <View style={styles.successActions}>
-             <TouchableOpacity style={styles.actionBtn}>
-               <Download size={20} color="#4F46E5" />
-               <Text style={styles.actionBtnText}>Save PDF</Text>
-             </TouchableOpacity>
-             <TouchableOpacity style={styles.actionBtn}>
-               <Share2 size={20} color="#4F46E5" />
-               <Text style={styles.actionBtnText}>Share</Text>
-             </TouchableOpacity>
-             <TouchableOpacity 
-               style={styles.doneBtn} 
-               onPress={() => router.replace('/(tabs)')}
-             >
-               <Text style={styles.doneBtnText}>Finish</Text>
-             </TouchableOpacity>
-          </View>
-        ) : signatureUri ? (
-          <View style={styles.placementActions}>
-            <TouchableOpacity 
-              style={styles.redrawBtn} 
-              onPress={openSignPad}
-            >
-              <RotateCcw size={18} color="#4F46E5" />
-              <Text style={styles.redrawBtnText}>Draw Again</Text>
-            </TouchableOpacity>
-            <TouchableOpacity 
-              style={styles.confirmBtn} 
-              onPress={confirmSignaturePlacement}
-            >
-              <Check size={18} color="#1E1B4B" />
-              <Text style={styles.confirmBtnText}>Confirm Placement</Text>
-            </TouchableOpacity>
-          </View>
+    <ScrollView contentContainerStyle={styles.agreement} accessibilityLabel="Agreement text">
+      {blocks.map((block, i) =>
+        block.startsWith('\u0000') ? (
+          <Typography key={i} variant="headline" style={styles.agreementHeading}>
+            {block.slice(1).trim()}
+          </Typography>
         ) : (
-          <View style={{ alignItems: 'center' }}>
-            <TouchableOpacity 
-              style={{
-                backgroundColor: '#FBBF24',
-                paddingVertical: 14,
-                paddingHorizontal: 40,
-                borderRadius: 12,
-                shadowColor: '#FBBF24',
-                shadowOffset: { width: 0, height: 4 },
-                shadowOpacity: 0.3,
-                shadowRadius: 8,
-                elevation: 4,
-              }} 
-              onPress={openSignPad}
-            >
-              <Text style={{ color: '#1E1B4B', fontWeight: '900', fontSize: 16 }}>Sign Now</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-      </View>
+          <Typography key={i} variant="callout" tone="textSecondary">
+            {block.trim()}
+          </Typography>
+        ),
+      )}
+      {/* Room so the "Sign here" field doesn't cover the last paragraph. */}
+      <View style={styles.agreementSpacer} />
+    </ScrollView>
+  );
+}
 
-      {/* REAL Signature Pad Modal */}
-      <Modal visible={showSignPad} animationType="slide">
-        <SafeAreaView style={styles.signPadContainer}>
-          <View style={styles.signPadHeader}>
-            <TouchableOpacity onPress={() => setShowSignPad(false)} style={styles.signPadClose}>
-              <X size={24} color="#1E1B4B" />
-            </TouchableOpacity>
-            <Text style={styles.signPadTitle}>Draw your Signature</Text>
-            <TouchableOpacity onPress={clearSignPad} style={styles.signPadClose}>
-              <RotateCcw size={20} color="#64748B" />
-            </TouchableOpacity>
-          </View>
-          
-          <View style={styles.signPadWrapper}>
-             <SignatureCanvas
-                ref={signatureRef}
-                onOK={handleSignature}
-                onEmpty={() => Alert.alert('Empty', 'Please provide a signature.')}
-                descriptionText="Sign your name clearly using your finger"
-                clearText="Clear"
-                confirmText="Save"
-                webStyle={`.m-signature-pad--footer {display: none; margin: 0;}`}
-                autoClear={false}
-                imageType="image/png"
-             />
-          </View>
-
-          <View style={styles.signPadFooter}>
-             <TouchableOpacity 
-               style={styles.signCancelBtn} 
-               onPress={() => setShowSignPad(false)}
-             >
-               <Text style={styles.signCancelText}>Discard</Text>
-             </TouchableOpacity>
-             <TouchableOpacity 
-               style={[styles.signSaveBtn, { backgroundColor: '#FBBF24', borderRadius: 14, justifyContent: 'center', alignItems: 'center' }]}
-               onPress={() => {
-                  signatureRef.current?.readSignature();
-               }}
-             >
-               <Text style={{ color: '#1E1B4B', fontWeight: '900', fontSize: 16 }}>Apply to Document</Text>
-             </TouchableOpacity>
-          </View>
-        </SafeAreaView>
-      </Modal>
+/** Light-weight stand-in page when there is no file to preview (e.g. demo documents). */
+function PlaceholderPage({ title, theme }: { title: string; theme: Theme }) {
+  const { colors } = theme;
+  const line = (width: `${number}%`) => <View style={[styles.line, { width, backgroundColor: colors.border }]} />;
+  return (
+    <View style={styles.placeholderPage}>
+      <View style={[styles.titleBar, { backgroundColor: colors.primary }]} />
+      <Typography variant="title3" numberOfLines={2}>
+        {title}
+      </Typography>
+      {line('96%')}
+      {line('88%')}
+      {line('92%')}
+      {line('70%')}
+      <View style={styles.paragraphGap} />
+      {line('94%')}
+      {line('86%')}
+      {line('60%')}
     </View>
   );
 }
 
+export default function SignDocumentScreen() {
+  const theme = useTheme();
+  const { colors, radius, spacing, shadows } = theme;
+  const { id, name, uri: uriParam } = useLocalSearchParams<{ id: string; name?: string; uri?: string }>();
+  const { profile, user } = useAuth();
+  const documentName = name || 'Untitled document';
+  const isExisting = !!id && id !== 'new';
+  // Route params can come from any deep link: only accept a file already on this device, and only for new documents.
+  const uri = !isExisting && uriParam && isLocalFileUri(uriParam) ? uriParam : undefined;
+
+  // Existing documents: load the record for its file / agreement text and earlier signatures.
+  const recordFetcher = useCallback(
+    (): Promise<DocumentRecord | null> => (isExisting ? getDocumentRecord(id) : Promise.resolve(null)),
+    [id, isExisting],
+  );
+  const { resource: recordResource } = useResource(recordFetcher);
+  const record = recordResource.data ?? null;
+  const previewUri = uri ?? (record ? recordFileUri(record, requireUser()) : undefined);
+  const previewType = uri ? fileTypeFor(documentName) : (record?.fileType ?? fileTypeFor(documentName));
+
+  const [phase, setPhase] = useState<Phase>('review');
+  const [signatureUri, setSignatureUri] = useState<string | null>(null);
+  const [padOpen, setPadOpen] = useState(false);
+  const [scale, setScale] = useState(1);
+  const [audit, setAudit] = useState<AuditRecord | null>(null);
+  const [pageBox, setPageBox] = useState({ width: 0, height: 0 });
+  const [signedInfo, setSignedInfo] = useState<SignedInfo | null>(null);
+  const [pdf, setPdf] = useState<PdfState>({ status: 'idle' });
+  const signatureRef = useRef<SignatureViewRef>(null);
+
+  // Animated values and the drag responder are created once per mount.
+  const [pan] = useState(() => new Animated.ValueXY(INITIAL_POSITION));
+  // Latest drag position, read when the signature is confirmed (not during render).
+  const position = useRef({ ...INITIAL_POSITION });
+  useEffect(() => {
+    const listener = pan.addListener((value) => {
+      position.current = value;
+    });
+    return () => pan.removeListener(listener);
+  }, [pan]);
+  const [stamp] = useState(() => new Animated.Value(0));
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderGrant: () => {
+          pan.extractOffset();
+          triggerHaptic('selection');
+        },
+        onPanResponderMove: Animated.event([null, { dx: pan.x, dy: pan.y }], { useNativeDriver: false }),
+        onPanResponderRelease: () => pan.flattenOffset(),
+      }),
+    [pan],
+  );
+
+  const step = phase === 'review' ? 0 : phase === 'signed' ? 2 : 1;
+  const signerName = profile ? `${profile.firstName} ${profile.lastName}` : user?.displayName || 'You';
+
+  const handleSignature = (signature: string) => {
+    setSignatureUri(signature);
+    setPadOpen(false);
+    setPhase('placing');
+    triggerHaptic('light');
+  };
+
+  const resetSignature = () => {
+    setSignatureUri(null);
+    setScale(1);
+    pan.setValue(INITIAL_POSITION);
+    setPhase('review');
+  };
+
+  /** Signature box on screen → fractions of the page box (accounts for the scale transform). */
+  const currentPlacement = (): SignaturePlacement | undefined => {
+    if (!pageBox.width || !pageBox.height) return undefined;
+    const w = SIGNATURE_BOX.width * scale;
+    const h = SIGNATURE_BOX.height * scale;
+    const left = position.current.x + (SIGNATURE_BOX.width - w) / 2;
+    const top = position.current.y + (SIGNATURE_BOX.height - h) / 2;
+    return {
+      xRatio: clamp01(left / pageBox.width),
+      yRatio: clamp01(top / pageBox.height),
+      widthRatio: clamp01(w / pageBox.width),
+    };
+  };
+
+  /** Builds the shareable signed PDF (stamped original + certificate). */
+  const generatePdf = async (info: SignedInfo) => {
+    if (Platform.OS === 'web') {
+      setPdf({ status: 'error', error: PDF_UNSUPPORTED_ON_WEB });
+      return;
+    }
+    setPdf({ status: 'working' });
+    try {
+      const me = requireUser();
+      const mine: PdfSignature = {
+        name: signerName,
+        email: me.email,
+        signedAt: info.signedAt,
+        signatureDataUrl: info.signatureDataUrl,
+        reference: info.reference,
+        placement: info.placement,
+      };
+      let pdfUri: string;
+      if (isExisting) {
+        // Include everyone who has signed so far; only this signature has a known placement.
+        const fresh = await getDocumentRecord(id);
+        const others: PdfSignature[] = trustedSignatures(fresh)
+          .filter((s) => s.email !== me.email)
+          .map((s) => ({ name: s.name, email: s.email, signedAt: s.actedAt ?? fresh.updatedAt, signatureDataUrl: s.signatureDataUrl! }));
+        pdfUri = await createSignedPdf({
+          title: fresh.title,
+          fileUri: recordFileUri(fresh, me),
+          fileType: fresh.fileType,
+          agreementBody: fresh.agreementBody,
+          signatures: [...others, mine],
+          reference: fresh.id.toUpperCase(),
+          fingerprint: documentFingerprint(fresh),
+        });
+      } else {
+        pdfUri = await createSignedPdf({
+          title: documentName.replace(/\.(pdf|docx?|png|jpe?g)$/i, ''),
+          fileUri: uri,
+          fileType: fileTypeFor(documentName),
+          signatures: [mine],
+          reference: info.reference,
+        });
+      }
+      setPdf({ status: 'ready', uri: pdfUri });
+    } catch (err) {
+      setPdf({ status: 'error', error: err instanceof Error ? err.message : 'Could not prepare the PDF.' });
+    }
+  };
+
+  const confirmPlacement = async () => {
+    if (!signatureUri) return;
+    const placement = currentPlacement();
+    setPhase('processing');
+    try {
+      // TODO(api): flatten the signature into the stored PDF server-side; the shareable signed copy is built on-device.
+      if (isExisting) {
+        await signDocument(id, signatureUri);
+      } else {
+        // A file the user uploaded and signed themselves becomes a completed document in their account.
+        const me = requireUser();
+        const fileUri = uri ? await uploadUserFile(me.uid, uri, documentName) : undefined;
+        await createDocument({
+          title: documentName.replace(/\.(pdf|docx?|png|jpe?g)$/i, ''),
+          status: 'completed',
+          signers: [{ id: me.uid, name: me.name, email: me.email, role: 'signer', signatureDataUrl: signatureUri, actedAt: Date.now() }],
+          signerStatus: 'signed',
+          fileUri: fileUri ?? uri,
+          fileType: fileTypeFor(documentName),
+          firstEvent: 'signed',
+        });
+      }
+      const info: SignedInfo = {
+        signatureDataUrl: signatureUri,
+        placement,
+        signedAt: Date.now(),
+        reference: isExisting ? id.toUpperCase() : makeId('END').toUpperCase(),
+      };
+      setAudit({ signer: signerName, signedAt: info.signedAt, reference: info.reference });
+      setSignedInfo(info);
+      setPhase('signed');
+      triggerHaptic('success');
+      Animated.spring(stamp, { toValue: 1, tension: 60, friction: 6, useNativeDriver: true }).start();
+      generatePdf(info);
+    } catch (err) {
+      console.error('Error signing document:', err);
+      setPhase('placing');
+      Alert.alert('Signing failed', err instanceof Error ? err.message : 'We could not apply your signature. Please try again.');
+    }
+  };
+
+  const onPageLayout = (e: LayoutChangeEvent) => {
+    const { width, height } = e.nativeEvent.layout;
+    setPageBox({ width, height });
+  };
+
+  const shareTitle = `Signed: ${documentName}`;
+  const shareMessage = `Here's the signed copy of ${documentName}, signed with Endorse.`;
+
+  const close = () => {
+    if (phase === 'placing') {
+      Alert.alert('Discard signature?', 'Your signature has not been applied yet.', [
+        { text: 'Keep signing', style: 'cancel' },
+        { text: 'Discard', style: 'destructive', onPress: goBack },
+      ]);
+    } else {
+      goBack();
+    }
+  };
+
+  const subtitle =
+    phase === 'signed' ? 'Signed and secured' : phase === 'placing' ? 'Drag to position your signature' : 'Review, then add your signature';
+
+  return (
+    <Screen>
+      <ScreenHeader title={documentName} subtitle={subtitle} leading="close" onLeadingPress={close} />
+      <View style={{ paddingBottom: spacing.md }}>
+        <StepIndicator steps={STEPS} current={step} />
+      </View>
+
+      {/* Document canvas */}
+      <View style={[styles.canvas, { paddingHorizontal: spacing.xl, paddingBottom: spacing.md }]}>
+        <View
+          onLayout={onPageLayout}
+          style={[styles.page, shadows.md, { backgroundColor: colors.surface, borderColor: colors.border, borderRadius: radius.lg }]}>
+          {isExisting && recordResource.status === 'loading' ? (
+            <View style={styles.centerFill}>
+              <ActivityIndicator color={colors.primary} />
+            </View>
+          ) : previewUri && previewType !== 'docx' ? (
+            previewType === 'pdf' ? (
+              <WebView
+                source={{ uri: previewUri }}
+                style={styles.fill}
+                // Show this one file and nothing else: no scripts, no navigation away, file access only for local files.
+                originWhitelist={['file://*', 'content://*', 'https://firebasestorage.googleapis.com/*']}
+                onShouldStartLoadWithRequest={(request) => request.url === previewUri}
+                javaScriptEnabled={false}
+                allowFileAccess={isLocalFileUri(previewUri)}
+                scalesPageToFit
+              />
+            ) : (
+              <Image source={{ uri: previewUri }} style={styles.fill} resizeMode="contain" accessibilityLabel={`Preview of ${documentName}`} />
+            )
+          ) : record?.agreementBody ? (
+            <AgreementText body={record.agreementBody} />
+          ) : (
+            <PlaceholderPage title={documentName} theme={theme} />
+          )}
+
+          {/* Guided "sign here" field */}
+          {phase === 'review' ? (
+            <PressableScale
+              onPress={() => setPadOpen(true)}
+              haptic="medium"
+              accessibilityLabel="Signature field. Tap to add your signature"
+              style={[styles.signHere, { borderColor: colors.accent, backgroundColor: colors.accentSoft, borderRadius: radius.md }]}>
+              <View style={[styles.signHereFlag, { backgroundColor: colors.accent }]}>
+                <PenLine size={14} color={colors.onAccent} strokeWidth={2.5} />
+                <Typography variant="micro" tone="onAccent">
+                  SIGN HERE
+                </Typography>
+              </View>
+              <Typography variant="captionStrong" tone="textSecondary">
+                Tap to add your signature
+              </Typography>
+            </PressableScale>
+          ) : null}
+
+          {/* Placed signature */}
+          {signatureUri ? (
+            <Animated.View
+              {...(phase === 'placing' ? panResponder.panHandlers : {})}
+              accessibilityLabel={phase === 'placing' ? 'Your signature. Drag to move it' : 'Your signature'}
+              style={[
+                styles.signature,
+                {
+                  borderColor: phase === 'placing' ? colors.primary : 'transparent',
+                  borderRadius: radius.sm,
+                  transform: [{ translateX: pan.x }, { translateY: pan.y }, { scale }],
+                },
+              ]}>
+              <Image source={{ uri: signatureUri }} style={styles.fill} resizeMode="contain" />
+              {phase === 'placing' ? (
+                <View style={[styles.moveBadge, { backgroundColor: colors.primary }]}>
+                  <Move size={12} color={colors.onPrimary} />
+                </View>
+              ) : null}
+              {phase === 'signed' ? (
+                <Animated.View style={[styles.verified, { backgroundColor: colors.status.success.fg, transform: [{ scale: stamp }] }]}>
+                  <ShieldCheck size={12} color={colors.surface} strokeWidth={2.5} />
+                  <Typography variant="micro" color={colors.surface}>
+                    VERIFIED
+                  </Typography>
+                </Animated.View>
+              ) : null}
+            </Animated.View>
+          ) : null}
+
+          {audit ? (
+            <View style={styles.audit} accessible accessibilityLabel={`Signed by ${audit.signer}, reference ${audit.reference}`}>
+              <Typography variant="micro" tone="textTertiary">
+                SIGNED BY {audit.signer.toUpperCase()}
+              </Typography>
+              <Typography variant="micro" tone="textTertiary">
+                {new Date(audit.signedAt).toLocaleString()} · {audit.reference}
+              </Typography>
+            </View>
+          ) : null}
+        </View>
+
+        {/* Resize controls while placing */}
+        {phase === 'placing' ? (
+          <View style={[styles.toolbar, { backgroundColor: colors.surface, borderColor: colors.border, borderRadius: radius.pill }, shadows.md]}>
+            <HeaderIconButton icon={Minus} label="Make signature smaller" onPress={() => setScale((s) => Math.max(MIN_SCALE, +(s - 0.15).toFixed(2)))} />
+            <Typography variant="captionStrong" tone="textSecondary" style={styles.scaleLabel}>
+              {Math.round(scale * 100)}%
+            </Typography>
+            <HeaderIconButton icon={Plus} label="Make signature larger" onPress={() => setScale((s) => Math.min(MAX_SCALE, +(s + 0.15).toFixed(2)))} />
+          </View>
+        ) : null}
+      </View>
+
+      <StickyFooter
+        summary={
+          phase === 'signed' ? (
+            <View style={{ gap: spacing.md }}>
+              <View style={[styles.banner, { backgroundColor: colors.status.success.soft, borderRadius: radius.md }]}>
+                <CircleCheck size={20} color={colors.status.success.fg} />
+                <Typography variant="calloutStrong" color={colors.status.success.fg} style={styles.flex}>
+                  Document signed. A copy has been added to your documents.
+                </Typography>
+              </View>
+              {pdf.status === 'ready' ? (
+                <View style={{ gap: spacing.sm }}>
+                  <Typography variant="captionStrong" tone="textSecondary">
+                    Share the signed PDF
+                  </Typography>
+                  <ShareActions getFile={async () => pdf.uri} title={shareTitle} message={shareMessage} />
+                </View>
+              ) : pdf.status === 'error' ? (
+                <View style={styles.pdfRow} accessibilityLiveRegion="polite">
+                  <Typography variant="caption" color={colors.status.declined.fg} style={styles.flex}>
+                    {pdf.error}
+                  </Typography>
+                  {Platform.OS !== 'web' && signedInfo ? (
+                    <Button label="Retry" icon={RefreshCw} variant="secondary" size="sm" onPress={() => generatePdf(signedInfo)} />
+                  ) : null}
+                </View>
+              ) : (
+                <View style={styles.pdfRow} accessibilityLiveRegion="polite">
+                  <ActivityIndicator color={colors.primary} />
+                  <Typography variant="caption" tone="textSecondary">
+                    Preparing PDF…
+                  </Typography>
+                </View>
+              )}
+            </View>
+          ) : phase === 'review' ? (
+            <Typography variant="caption" tone="textSecondary" style={styles.center}>
+              Tap the highlighted field or the button below to sign.
+            </Typography>
+          ) : null
+        }>
+        {phase === 'review' ? (
+          <Button label="Add signature" icon={PenLine} variant="accent" haptic="medium" onPress={() => setPadOpen(true)} style={styles.flex} />
+        ) : phase === 'signed' ? (
+          <Button label="Done" variant="primary" onPress={() => router.replace('/(tabs)/home')} style={styles.flex} />
+        ) : (
+          <>
+            <Button label="Redraw" icon={RotateCcw} variant="secondary" onPress={resetSignature} style={styles.flex} />
+            <Button
+              label={phase === 'processing' ? 'Securing…' : 'Confirm & sign'}
+              variant="accent"
+              haptic="medium"
+              loading={phase === 'processing'}
+              onPress={confirmPlacement}
+              style={styles.wide}
+            />
+          </>
+        )}
+      </StickyFooter>
+
+      {/* Signature pad */}
+      <Modal visible={padOpen} animationType="slide" onRequestClose={() => setPadOpen(false)}>
+        <Screen edges={['top', 'bottom']}>
+          <ScreenHeader
+            title="Draw your signature"
+            subtitle="Use your finger to sign above the line"
+            leading="close"
+            onLeadingPress={() => setPadOpen(false)}
+            actions={[{ icon: Eraser, label: 'Clear signature', onPress: () => signatureRef.current?.clearSignature() }]}
+          />
+          <View style={[styles.padWrap, { margin: spacing.xl, borderColor: colors.borderStrong, borderRadius: radius.xl }]}>
+            <SignatureCanvas
+              ref={signatureRef}
+              onOK={handleSignature}
+              onEmpty={() => Alert.alert('Nothing to save', 'Draw your signature first.')}
+              autoClear={false}
+              imageType="image/png"
+              webStyle={`.m-signature-pad { box-shadow: none; border: none; } .m-signature-pad--footer { display: none; margin: 0; } body, html { background: #FFFFFF; }`}
+            />
+            <View pointerEvents="none" style={[styles.baseline, { borderColor: colors.borderStrong }]}>
+              <Typography variant="caption" tone="textTertiary">
+                ✕
+              </Typography>
+            </View>
+          </View>
+          <View style={[styles.padFooter, { paddingHorizontal: spacing.xl, paddingBottom: spacing.lg, gap: spacing.md }]}>
+            <Button label="Cancel" variant="secondary" onPress={() => setPadOpen(false)} style={styles.flex} />
+            <Button label="Apply signature" variant="accent" haptic="medium" onPress={() => signatureRef.current?.readSignature()} style={styles.wide} />
+          </View>
+        </Screen>
+      </Modal>
+    </Screen>
+  );
+}
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#F8FAFC',
-  },
-  header: {
-    paddingBottom: 24,
-    borderBottomLeftRadius: 32,
-    borderBottomRightRadius: 32,
-  },
-  headerContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    marginTop: Platform.OS === 'android' ? 20 : 0,
-  },
-  titleContainer: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  docName: {
-    color: '#FFF',
-    fontSize: 16,
-    fontWeight: '800',
-  },
-  statusSub: {
-    color: 'rgba(255,255,255,0.6)',
-    fontSize: 11,
-    fontWeight: '700',
-    marginTop: 2,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  iconButton: {
-    width: 44,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  canvas: {
-    flex: 1,
-    padding: 24,
-    justifyContent: 'center',
-  },
-  pageMock: {
-    backgroundColor: '#FFF',
-    borderRadius: 16,
-    padding: 32,
-    height: '92%',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.05,
-    shadowRadius: 20,
-    elevation: 3,
-    position: 'relative',
-  },
-  dummyTextRow: {
-    height: 10,
-    backgroundColor: '#F1F5F9',
-    borderRadius: 5,
-    marginBottom: 16,
-    width: '100%',
-  },
-  signaturePlaceholder: {
+  flex: { flex: 1 },
+  wide: { flex: 1.5 },
+  center: { textAlign: 'center' },
+  fill: { flex: 1, width: '100%', height: '100%', backgroundColor: 'transparent' },
+  centerFill: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  agreement: { padding: 24, gap: 10 },
+  agreementHeading: { marginTop: 6 },
+  agreementSpacer: { height: 170 },
+  pdfRow: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 44 },
+  canvas: { flex: 1 },
+  page: { flex: 1, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
+  placeholderPage: { flex: 1, padding: 28, gap: 10 },
+  titleBar: { width: 56, height: 6, borderRadius: 3, marginBottom: 6 },
+  line: { height: 6, borderRadius: 3 },
+  paragraphGap: { height: 12 },
+  signHere: {
     position: 'absolute',
-    bottom: 80,
-    left: 32,
-    right: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
+    left: 28,
+    right: 28,
+    bottom: 64,
+    minHeight: 84,
     borderWidth: 2,
-    borderColor: '#EEF2FF',
     borderStyle: 'dashed',
-    borderRadius: 20,
-    padding: 32,
-    backgroundColor: '#F8FAFC',
-  },
-  signPulse: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: '#EEF2FF',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 12,
+    gap: 6,
   },
-  placeholderText: {
-    color: '#94A3B8',
-    fontSize: 14,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  signatureResult: {
+  signHereFlag: { position: 'absolute', top: -12, left: 12, flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
+  signature: {
     position: 'absolute',
     top: 0,
     left: 0,
-    width: 180,
-    height: 100,
-    justifyContent: 'center',
-    zIndex: 100,
+    width: SIGNATURE_BOX.width,
+    height: SIGNATURE_BOX.height,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    padding: 4,
   },
-  resizeControls: {
+  moveBadge: { position: 'absolute', top: -10, left: -10, width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  verified: { position: 'absolute', top: -12, right: -12, flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
+  audit: { position: 'absolute', left: 28, bottom: 20, gap: 2 },
+  toolbar: {
     position: 'absolute',
-    top: -40,
-    right: 0,
+    bottom: 28,
+    alignSelf: 'center',
     flexDirection: 'row',
+    alignItems: 'center',
     gap: 8,
+    padding: 6,
+    borderWidth: StyleSheet.hairlineWidth,
   },
-  resizeBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#EEF2FF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#C7D2FE',
-  },
-  resizeText: {
-    fontSize: 20,
-    fontWeight: '900',
-    color: '#4F46E5',
-    lineHeight: 24,
-  },
-  signatureImage: {
-    width: '100%',
-    height: '100%',
-  },
-  verifiedStamp: {
-    position: 'absolute',
-    top: -10,
-    right: -10,
-    backgroundColor: '#22C55E',
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-    gap: 4,
-  },
-  stampText: {
-    color: '#FFF',
-    fontSize: 9,
-    fontWeight: '900',
-  },
-  auditLog: {
-    position: 'absolute',
-    bottom: 20,
-    left: 32,
-  },
-  auditText: {
-    fontSize: 8,
-    color: '#94A3B8',
-    fontWeight: '800',
-    letterSpacing: 0.5,
-  },
-  footer: {
-    padding: 24,
-    backgroundColor: '#FFF',
-    borderTopWidth: 1,
-    borderTopColor: '#F1F5F9',
-    paddingBottom: Platform.OS === 'ios' ? 40 : 24,
-  },
-  hintText: {
-    textAlign: 'center',
-    color: '#64748B',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  processingState: {
-    alignItems: 'center',
-  },
-  processingText: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#4F46E5',
-    letterSpacing: 0.5,
-  },
-  successActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  actionBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 14,
-    borderRadius: 12,
-    backgroundColor: '#F8FAFC',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  actionBtnText: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#1E1B4B',
-  },
-  doneBtn: {
-    flex: 1.2,
-    backgroundColor: '#1E1B4B',
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  doneBtnText: {
-    color: '#FFF',
-    fontWeight: '800',
-    fontSize: 14,
-  },
-  /* Sign Pad Modal Styles */
-  signPadContainer: {
-    flex: 1,
-    backgroundColor: '#FFF',
-  },
-  signPadHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
-  },
-  signPadClose: {
-    padding: 8,
-  },
-  signPadTitle: {
-    fontSize: 18,
-    fontWeight: '900',
-    color: '#1E1B4B',
-  },
-  signPadWrapper: {
-    flex: 1,
-    margin: 20,
-    borderRadius: 20,
-    borderWidth: 2,
-    borderColor: '#F1F5F9',
-    overflow: 'hidden',
-  },
-  signPadFooter: {
-    flexDirection: 'row',
-    padding: 24,
-    gap: 16,
-  },
-  signCancelBtn: {
-    flex: 1,
-    paddingVertical: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 14,
-    backgroundColor: '#F8FAFC',
-  },
-  signCancelText: {
-    fontWeight: '800',
-    color: '#64748B',
-  },
-  signSaveBtn: {
-    flex: 2,
-  },
-  signSaveGradient: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 16,
-    borderRadius: 14,
-    gap: 10,
-  },
-  signSaveText: {
-    color: '#FFF',
-    fontWeight: '800',
-    fontSize: 16,
-  },
-  dragGuideBanner: {
-    position: 'absolute',
-    top: 12,
-    left: 12,
-    right: 12,
-    backgroundColor: 'rgba(79, 70, 229, 0.08)',
-    borderWidth: 1,
-    borderColor: 'rgba(79, 70, 229, 0.2)',
-    borderRadius: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 99,
-  },
-  dragGuideText: {
-    color: '#4F46E5',
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 0.3,
-  },
-  placementActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    width: '100%',
-  },
-  redrawBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 14,
-    borderRadius: 12,
-    backgroundColor: '#F8FAFC',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    gap: 6,
-  },
-  redrawBtnText: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#4F46E5',
-  },
-  confirmBtn: {
-    flex: 1.5,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 14,
-    borderRadius: 12,
-    backgroundColor: '#FBBF24',
-    shadowColor: '#FBBF24',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
-    gap: 6,
-  },
-  confirmBtnText: {
-    fontSize: 14,
-    fontWeight: '900',
-    color: '#1E1B4B',
-  },
+  scaleLabel: { minWidth: 44, textAlign: 'center' },
+  banner: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12 },
+  padWrap: { flex: 1, borderWidth: 1.5, borderStyle: 'dashed', overflow: 'hidden' },
+  baseline: { position: 'absolute', left: 24, right: 24, bottom: '30%', borderBottomWidth: 1.5, paddingBottom: 2 },
+  padFooter: { flexDirection: 'row' },
 });

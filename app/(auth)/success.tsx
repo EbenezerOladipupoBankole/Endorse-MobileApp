@@ -13,7 +13,7 @@ export default function SuccessScreen() {
 
   const onGoToDashboard = () => {
     // Navigate to dashboard
-    router.replace('/(tabs)');
+    router.replace('/(tabs)/home');
   };
 
   return (
@@ -107,7 +107,7 @@ const styles = StyleSheet.create({
     backgroundColor: T.colors.yellow,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#FFC72C',
+    shadowColor: '#F8D12D',
     shadowOffset: { width: 0, height: 10 },
     shadowOpacity: 0.32,
     shadowRadius: 26,

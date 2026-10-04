@@ -1,10 +1,10 @@
-const tintColorLight = '#2563EB'; // Brand Blue
+const tintColorLight = '#0E68B4'; // Logo blue
 const tintColorDark = '#3B82F6';
 
 export default {
   light: {
     text: '#0F172A',
-    background: '#F8FAFC', // Match web background
+    background: '#FFFFFF',
     tint: tintColorLight,
     tabIconDefault: '#94A3B8',
     tabIconSelected: tintColorLight,

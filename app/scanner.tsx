@@ -408,7 +408,7 @@ const styles = StyleSheet.create({
     height: '100%',
   },
   bwOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(255,255,255,0.2)', // Light simulated overlay instead of tintColor
   },
   /* Custom Cropper Styles */

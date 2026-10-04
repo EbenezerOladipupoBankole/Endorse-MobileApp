@@ -1,9 +1,10 @@
 import React from 'react';
-import { StyleSheet, TouchableOpacity, ScrollView, Image, Switch } from 'react-native';
+import { Alert, StyleSheet, TouchableOpacity, ScrollView, Switch } from 'react-native';
 import { Text, View } from '@/components/Themed';
-import { User, Shield, CreditCard, Bell, Moon, Globe, LogOut, ChevronRight, HelpCircle, FileText, Signature } from 'lucide-react-native';
-import { router } from 'expo-router';
+import { User, Shield, CreditCard, Bell, Globe, LogOut, ChevronRight, HelpCircle, FileText, Signature, Briefcase, Workflow, HardDrive } from 'lucide-react-native';
+import { router, type Href } from 'expo-router';
 import { auth } from '@/lib/firebase';
+import { useAuth } from '@/context/AuthContext';
 import Colors from '@/constants/Colors';
 import { useColorScheme } from '@/components/useColorScheme';
 
@@ -14,6 +15,7 @@ interface SettingItem {
   value?: string;
   badge?: string;
   right?: React.ReactNode;
+  href?: Href;
 }
 
 interface SettingSection {
@@ -24,9 +26,22 @@ interface SettingSection {
 export default function SettingsScreen() {
   const colorScheme = useColorScheme() ?? 'light';
   const tint = Colors[colorScheme].tint;
-  const isDark = colorScheme === 'dark';
 
   const [notificationsEnabled, setNotificationsEnabled] = React.useState(true);
+  const { logout } = useAuth();
+
+  const confirmSignOut = () =>
+    Alert.alert('Sign out?', 'You can sign back in any time.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Sign out',
+        style: 'destructive',
+        onPress: async () => {
+          await logout();
+          router.replace('/(auth)/login');
+        },
+      },
+    ]);
 
   const sections: SettingSection[] = [
     {
@@ -36,6 +51,14 @@ export default function SettingsScreen() {
         { icon: Signature, label: 'Digital Signature', color: '#8B5CF6', value: 'Saved' }, // Added this
         { icon: Shield, label: 'Security & Password', color: '#F43F5E' },
         { icon: CreditCard, label: 'Plans & Billing', color: '#10B981', badge: 'Pro' },
+      ]
+    },
+    {
+      title: 'Workspace',
+      items: [
+        { icon: Briefcase, label: 'Teams', color: '#0E68B4', value: 'Collaborators', href: '/teams' },
+        { icon: Workflow, label: 'Workflows', color: '#1A7A4C', value: 'Approvals', href: '/workflow' },
+        { icon: HardDrive, label: 'Vault', color: '#9A5B00', value: 'Secure storage', href: '/vault' },
       ]
     },
     {
@@ -59,7 +82,7 @@ export default function SettingsScreen() {
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>Settings</Text>
+        <Text style={styles.title}>Profile</Text>
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
@@ -90,7 +113,9 @@ export default function SettingsScreen() {
                   style={styles.itemRow} 
                   activeOpacity={0.6}
                   onPress={() => {
-                    if (item.label === 'Digital Signature') {
+                    if (item.href) {
+                      router.push(item.href);
+                    } else if (item.label === 'Digital Signature') {
                       router.push('/modal');
                     }
                   }}
@@ -109,7 +134,7 @@ export default function SettingsScreen() {
         ))}
 
         {/* Logout Button */}
-        <TouchableOpacity style={styles.logoutButton}>
+        <TouchableOpacity style={styles.logoutButton} onPress={confirmSignOut} accessibilityRole="button">
           <LogOut size={20} color="#EF4444" />
           <Text style={styles.logoutText}>Sign Out</Text>
         </TouchableOpacity>

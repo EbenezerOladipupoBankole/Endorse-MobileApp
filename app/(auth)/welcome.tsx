@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, Pressable, Platform, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Platform, Dimensions, DimensionValue } from 'react-native';
 import { useRouter } from 'expo-router';
 import Svg, { Path, Rect, Circle } from 'react-native-svg';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -16,7 +16,7 @@ const SLIDES = [
 
 const MG_ROWS = [
   { iconBg: '#FFF1C9', iconStroke: '#B8871E', w1: '68%', w2: '40%', tag: 'Signed', tagBg: '#FFF1C9', tagFg: '#A9781A' },
-  { iconBg: '#EAF2FC', iconStroke: '#2E68B0', w1: '54%', w2: '46%', tag: 'Draft', tagBg: '#EAF2FC', tagFg: '#2E68B0' },
+  { iconBg: '#E7F0FA', iconStroke: '#0E68B4', w1: '54%', w2: '46%', tag: 'Draft', tagBg: '#E7F0FA', tagFg: '#0E68B4' },
   { iconBg: '#E7F3EC', iconStroke: '#2E9E5B', w1: '72%', w2: '34%', tag: 'Sent', tagBg: '#E7F3EC', tagFg: '#2E9E5B' },
 ];
 
@@ -27,7 +27,7 @@ function ScanHero() {
         <View style={[heroStyles.scanLayer1, { transform: [{ rotate: '-9deg' }] }]} />
         <View style={[heroStyles.scanLayer2, { transform: [{ rotate: '4deg' }] }]} />
         <View style={[heroStyles.scanTopLayer, { transform: [{ rotate: '-2deg' }] }]}>
-          {['56%', '94%', '86%', '92%', '78%', '88%', '54%'].map((w, i) => (
+          {(['56%', '94%', '86%', '92%', '78%', '88%', '54%'] as DimensionValue[]).map((w, i) => (
             <View key={i} style={[
               heroStyles.scanLine, 
               { width: w, height: i === 0 ? 7 : 6, backgroundColor: i === 0 ? '#C7D3E4' : '#E7ECF3' },
@@ -69,8 +69,8 @@ function ManageHero() {
               </Svg>
             </View>
             <View style={{ flex: 1 }}>
-              <View style={[heroStyles.manageRowLine1, { width: r.w1 }]} />
-              <View style={[heroStyles.manageRowLine2, { width: r.w2 }]} />
+              <View style={[heroStyles.manageRowLine1, { width: r.w1 as DimensionValue }]} />
+              <View style={[heroStyles.manageRowLine2, { width: r.w2 as DimensionValue }]} />
             </View>
             <View style={[heroStyles.manageTag, { backgroundColor: r.tagBg }]}>
               <Text style={[heroStyles.manageTagText, { color: r.tagFg }]}>{r.tag}</Text>
@@ -220,7 +220,7 @@ export default function WelcomeScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: T.colors.white },
   cardContainer: { flex: 1, marginHorizontal: 16, marginTop: 4, borderRadius: 28, overflow: 'hidden', position: 'relative' },
-  patternLayer: { position: 'absolute', inset: 0, opacity: 0.1, backgroundColor: 'rgba(255,199,44,0.05)' },
+  patternLayer: { position: 'absolute', inset: 0, opacity: 0.1, backgroundColor: 'rgba(248,209,45,0.05)' },
   scrim: { position: 'absolute', inset: 0, zIndex: 1 },
   badgeContainer: { position: 'absolute', top: 18, right: 18, zIndex: 3, backgroundColor: T.colors.yellow, paddingHorizontal: 13, paddingVertical: 7, borderRadius: 20, flexDirection: 'row', alignItems: 'center', gap: 6, shadowColor: '#060E1C', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.35, shadowRadius: 18, elevation: 5 },
   badgeText: { fontFamily: T.fonts.jakarta.bold, fontSize: 11, color: T.colors.navyInk },
@@ -232,14 +232,14 @@ const styles = StyleSheet.create({
   dot: { height: 4, width: 7, borderRadius: 3, backgroundColor: '#E1E7F0' },
   dotActive: { width: 26, backgroundColor: T.colors.yellow },
   actionCol: { gap: 11 },
-  primaryBtn: { height: 56, borderRadius: 16, backgroundColor: T.colors.yellow, alignItems: 'center', justifyContent: 'center', shadowColor: '#FFC72C', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.34, shadowRadius: 22, elevation: 5 },
+  primaryBtn: { height: 56, borderRadius: 16, backgroundColor: T.colors.yellow, alignItems: 'center', justifyContent: 'center', shadowColor: '#F8D12D', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.34, shadowRadius: 22, elevation: 5 },
   primaryBtnText: { fontFamily: T.fonts.jakarta.bold, fontSize: 16, color: T.colors.navyInk },
   secondaryBtn: { height: 56, borderWidth: 1, borderColor: T.colors.border, borderRadius: 16, backgroundColor: T.colors.white, alignItems: 'center', justifyContent: 'center' },
   secondaryBtnText: { fontFamily: T.fonts.jakarta.semiBold, fontSize: 16, color: T.colors.ink },
   actionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   skipBtn: { padding: 10 },
   skipText: { fontFamily: T.fonts.jakarta.semiBold, fontSize: 15, color: T.colors.inkSoft },
-  continueBtn: { height: 56, paddingHorizontal: 30, borderRadius: 16, backgroundColor: T.colors.yellow, flexDirection: 'row', alignItems: 'center', gap: 8, shadowColor: '#FFC72C', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.34, shadowRadius: 22, elevation: 5 },
+  continueBtn: { height: 56, paddingHorizontal: 30, borderRadius: 16, backgroundColor: T.colors.yellow, flexDirection: 'row', alignItems: 'center', gap: 8, shadowColor: '#F8D12D', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.34, shadowRadius: 22, elevation: 5 },
   continueText: { fontFamily: T.fonts.jakarta.bold, fontSize: 16, color: T.colors.navyInk },
 });
 
@@ -251,8 +251,8 @@ const heroStyles = StyleSheet.create({
   scanLayer2: { position: 'absolute', top: 8, left: -14, width: 158, height: 200, backgroundColor: '#34588a', borderRadius: 13 },
   scanTopLayer: { position: 'relative', width: 176, backgroundColor: '#FBFCFE', borderRadius: 13, paddingHorizontal: 22, paddingVertical: 24, shadowColor: '#060E1C', shadowOffset: { width: 0, height: 28 }, shadowOpacity: 0.6, shadowRadius: 54, elevation: 10 },
   scanLine: { borderRadius: 3 },
-  bracket: { position: 'absolute', width: 30, height: 30, borderColor: '#FFC72C', zIndex: 2 },
-  scanLaser: { position: 'absolute', left: -10, right: -10, top: '46%', height: 3, backgroundColor: '#FFC72C', shadowColor: '#FFC72C', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 16, elevation: 8, zIndex: 3 },
+  bracket: { position: 'absolute', width: 30, height: 30, borderColor: '#F8D12D', zIndex: 2 },
+  scanLaser: { position: 'absolute', left: -10, right: -10, top: '46%', height: 3, backgroundColor: '#F8D12D', shadowColor: '#F8D12D', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 16, elevation: 8, zIndex: 3 },
   
   // Manage
   manageCard: { width: 236, backgroundColor: '#FBFCFE', borderRadius: 16, padding: 16, shadowColor: '#060E1C', shadowOffset: { width: 0, height: 28 }, shadowOpacity: 0.6, shadowRadius: 54, elevation: 10 },
@@ -271,5 +271,5 @@ const heroStyles = StyleSheet.create({
   signLine: { height: 6, borderRadius: 3, backgroundColor: '#E7ECF3', marginBottom: 10 },
   signKickerText: { fontFamily: T.fonts.jakarta.bold, fontSize: 8, letterSpacing: 1, color: '#9AA7BC', marginBottom: 6 },
   signBaseline: { height: 1.5, backgroundColor: '#C9D3E0', marginTop: 3 },
-  signBadge: { position: 'absolute', bottom: -16, right: -18, width: 58, height: 58, borderRadius: 29, backgroundColor: '#FFC72C', alignItems: 'center', justifyContent: 'center', shadowColor: '#060E1C', shadowOffset: { width: 0, height: 12 }, shadowOpacity: 0.4, shadowRadius: 26, elevation: 8, borderWidth: 2.5, borderStyle: 'dashed', borderColor: 'rgba(20,33,61,0.35)' },
+  signBadge: { position: 'absolute', bottom: -16, right: -18, width: 58, height: 58, borderRadius: 29, backgroundColor: '#F8D12D', alignItems: 'center', justifyContent: 'center', shadowColor: '#060E1C', shadowOffset: { width: 0, height: 12 }, shadowOpacity: 0.4, shadowRadius: 26, elevation: 8, borderWidth: 2.5, borderStyle: 'dashed', borderColor: 'rgba(20,33,61,0.35)' },
 });
