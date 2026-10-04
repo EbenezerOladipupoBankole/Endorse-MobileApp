@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "mobile",
+    "name": "Endorse",
     "slug": "mobile",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -19,7 +19,12 @@
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
-      }
+      },
+      "blockedPermissions": [
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -42,7 +47,16 @@
       ],
       "expo-status-bar",
       "expo-mail-composer",
-      "expo-asset"
+      "expo-asset",
+      "expo-updates",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Endorse needs access to your photos so you can upload documents to sign.",
+          "cameraPermission": "Endorse needs the camera so you can scan paper documents.",
+          "microphonePermission": false
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
@@ -52,6 +66,12 @@
       "eas": {
         "projectId": "eb4aaf22-58d1-4be3-9490-0c297efed2ab"
       }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/eb4aaf22-58d1-4be3-9490-0c297efed2ab"
     }
   }
 }

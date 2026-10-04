@@ -116,6 +116,33 @@ eas build --profile preview       # Android APK for testers
 eas build --profile production
 ```
 
+`.env` isn't uploaded to EAS, so cloud builds read their `EXPO_PUBLIC_*` values from EAS environment variables instead. Each profile uses the EAS environment of the same name. To view or change them:
+
+```bash
+eas env:list --environment preview
+eas env:create --name EXPO_PUBLIC_... --value ... --environment preview --visibility plaintext
+```
+
+Version codes are managed by EAS and go up automatically with each build, so a new APK installs over the old one.
+
+### Sharing a test build
+
+```bash
+eas build -p android --profile preview
+```
+
+When the build finishes, EAS gives you an install link and QR code you can send to testers. On Android, testers need to allow "Install unknown apps" when prompted.
+
+### Over-the-air updates
+
+JavaScript and asset changes can be sent to installed builds without a new APK:
+
+```bash
+eas update --channel preview --environment preview --message "Describe the change"
+```
+
+Testers get the update the next time they open the app. A new build is still required after native changes: adding a native library, changing permissions or the icon, or any other `app.json` change. When the app version in `app.json` changes, earlier builds stop receiving updates, because `runtimeVersion` follows the app version.
+
 ## Troubleshooting
 
 - **`auth/network-request-failed` / "client is offline"**: the device cannot reach Google's servers. Check the simulator or device's network, any VPN or proxy, and the device clock. The app reconnects on its own when the network returns.
